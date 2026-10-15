@@ -6,10 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.util.Log
 
 /**
  * Model representing an action on a notification (e.g., Reply, Like, Archive).
- * Supports standard actions and direct RemoteInput inline replies.
+ * Supports standard actions and direct RemoteInput inline replies with robust error handling.
  */
 data class NotificationActionItem(
     val title: String,
@@ -20,6 +21,7 @@ data class NotificationActionItem(
 ) {
     /**
      * Dispatches a typed reply message via the action's RemoteInput PendingIntent.
+     * Accurately catches CanceledException and SecurityException without swallowing errors.
      */
     fun sendReply(context: Context, replyText: CharSequence): Boolean {
         val pi = intent ?: return false
@@ -35,8 +37,14 @@ data class NotificationActionItem(
         return try {
             pi.send(context, 0, fillInIntent)
             true
+        } catch (e: PendingIntent.CanceledException) {
+            Log.w("NotificationAction", "PendingIntent was canceled for reply: ${e.message}")
+            false
+        } catch (e: SecurityException) {
+            Log.e("NotificationAction", "SecurityException executing reply action: ${e.message}")
+            false
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("NotificationAction", "Unexpected error executing reply action: ${e.message}")
             false
         }
     }

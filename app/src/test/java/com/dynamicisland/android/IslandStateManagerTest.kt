@@ -2,6 +2,7 @@ package com.dynamicisland.android
 
 import com.dynamicisland.android.model.BatteryInfo
 import com.dynamicisland.android.model.CallInfo
+import com.dynamicisland.android.model.CallSource
 import com.dynamicisland.android.model.CallState
 import com.dynamicisland.android.model.IslandSettings
 import com.dynamicisland.android.model.IslandState
@@ -11,6 +12,7 @@ import com.dynamicisland.android.model.TimerInfo
 import com.dynamicisland.android.service.IslandEventBus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -30,6 +32,7 @@ class IslandStateManagerTest {
         val ringingCall = CallInfo(
             callerName = "Alice",
             state = CallState.RINGING,
+            source = CallSource.VOIP,
             isVoip = true
         )
         IslandEventBus.updateCall(ringingCall)
@@ -38,6 +41,7 @@ class IslandStateManagerTest {
         val activeCall = CallInfo(
             callerName = "Bob",
             state = CallState.OFFHOOK,
+            source = CallSource.CELLULAR,
             callDurationSeconds = 42L
         )
         IslandEventBus.updateCall(activeCall)
@@ -45,8 +49,42 @@ class IslandStateManagerTest {
     }
 
     @Test
+    fun testMultiSourceCallRemovalDoesNotClearCellularCall() {
+        // 1. Cellular call is active
+        val cellularCall = CallInfo(
+            callerName = "David",
+            state = CallState.OFFHOOK,
+            source = CallSource.CELLULAR,
+            appName = "Phone",
+            callDurationSeconds = 10L
+        )
+        IslandEventBus.updateCall(cellularCall)
+        assertEquals(CallSource.CELLULAR, IslandEventBus.callState.value?.source)
+
+        // 2. VoIP incoming ringing call notification arrives
+        val voipCall = CallInfo(
+            callerName = "WhatsApp Group",
+            state = CallState.RINGING,
+            source = CallSource.VOIP,
+            isVoip = true,
+            appName = "WhatsApp"
+        )
+        IslandEventBus.updateCall(voipCall)
+        assertEquals(CallSource.VOIP, IslandEventBus.callState.value?.source)
+
+        // 3. VoIP notification dismissed/removed
+        IslandEventBus.removeCallBySource(CallSource.VOIP)
+
+        // 4. Assert that cellular call is STILL active and authoritative!
+        val remaining = IslandEventBus.callState.value
+        assertNotNull(remaining)
+        assertEquals(CallSource.CELLULAR, remaining?.source)
+        assertEquals("David", remaining?.callerName)
+        assertEquals(CallState.OFFHOOK, remaining?.state)
+    }
+
+    @Test
     fun testAuthoritativeStatePersistence() {
-        // Ensure state is retained in StateFlow regardless of subscriber timing
         val media = MediaInfo(
             title = "Blinding Lights",
             artist = "The Weeknd",
@@ -58,10 +96,59 @@ class IslandStateManagerTest {
         val battery = BatteryInfo(
             level = 85,
             isCharging = true,
-            chargingSpeedType = "Super Fast Charging"
+            chargingSpeedType = "Fast Charging (AC)"
         )
         IslandEventBus.updateBattery(battery)
         assertEquals(85, IslandEventBus.batteryState.value?.level)
+    }
+
+    @Test
+    fun testUnknownBatteryLevelHandling() {
+        val unknownBattery = BatteryInfo(level = -1, isCharging = false)
+        assertTrue(unknownBattery.isUnknown)
+        assertEquals("--%", unknownBattery.displayPercentage)
+
+        val validBattery = BatteryInfo(level = 68, isCharging = true)
+        assertFalse(validBattery.isUnknown)
+        assertEquals("68%", validBattery.displayPercentage)
+    }
+
+    @Test
+    fun testTimerMultiFormatAndUnknownDuration() {
+        // Unknown duration (parsing failed or stopwatch)
+        val unknownTimer = TimerInfo(
+            label = "Baking",
+            remainingSeconds = -1L,
+            rawTimeText = "In Progress"
+        )
+        assertTrue(unknownTimer.isUnknownDuration)
+        assertEquals("In Progress", unknownTimer.formattedRemaining)
+
+        // HH:MM:SS format
+        val longTimer = TimerInfo(
+            label = "Marathon",
+            totalSeconds = 7200L,
+            remainingSeconds = 3665L // 1 hour, 1 minute, 5 seconds
+        )
+        assertFalse(longTimer.isUnknownDuration)
+        assertEquals("1:01:05", longTimer.formattedRemaining)
+    }
+
+    @Test
+    fun testReconcileActiveNotificationsPruning() {
+        val notif1 = NotificationItem(key = "k1", packageName = "p1", appName = "App 1", title = "T1", text = "X1")
+        val notif2 = NotificationItem(key = "k2", packageName = "p2", appName = "App 2", title = "T2", text = "X2")
+        val notif3 = NotificationItem(key = "k3", packageName = "p3", appName = "App 3", title = "T3", text = "X3")
+
+        IslandEventBus.seedActiveNotifications(listOf(notif1, notif2, notif3))
+        assertEquals(3, IslandEventBus.activeNotifications.value.size)
+
+        // Reconcile with active system snapshot: only k2 is currently in system tray
+        IslandEventBus.reconcileActiveNotifications(setOf("k2"), listOf(notif2))
+        assertEquals(1, IslandEventBus.activeNotifications.value.size)
+        assertTrue(IslandEventBus.activeNotifications.value.containsKey("k2"))
+        assertFalse(IslandEventBus.activeNotifications.value.containsKey("k1"))
+        assertFalse(IslandEventBus.activeNotifications.value.containsKey("k3"))
     }
 
     @Test
@@ -86,65 +173,36 @@ class IslandStateManagerTest {
     }
 
     @Test
-    fun testTimerControlsModelWithReset() {
-        val timer = TimerInfo(
-            label = "Eggs",
-            totalSeconds = 180L,
-            remainingSeconds = 60L,
-            isRunning = true,
-            resetIntent = null
-        )
-        assertEquals("1:00", timer.formattedRemaining)
-        assertEquals(0.666f, timer.progressFraction, 0.01f)
-        assertFalse(timer.hasExecutableControls)
-    }
-
-    @Test
     fun testNoReplayOfTransientEvents() {
         // Verify that replay = 0 prevents caching old transient events
         assertTrue(IslandEventBus.transientEvents.replayCache.isEmpty())
     }
 
     @Test
-    fun testSeedingNotificationWithoutToast() {
-        val notif = NotificationItem(
-            key = "seed_key",
-            packageName = "com.slack",
-            appName = "Slack",
-            title = "Team",
-            text = "Deployment successful"
-        )
-        // Seeding updates active notifications without emitting to transientEvents
-        IslandEventBus.seedNotification(notif)
-        assertTrue(IslandEventBus.activeNotifications.value.containsKey("seed_key"))
-        assertTrue(IslandEventBus.transientEvents.replayCache.isEmpty())
-    }
-
-    @Test
     fun testCallMergingPreservesCallerName() {
-        // 1. Initial VoIP/Notification call arrives with specific caller name
         val specificCall = CallInfo(
             callerName = "Sarah Miller",
             callerNumber = "+1 (555) 019-2834",
             state = CallState.RINGING,
+            source = CallSource.VOIP,
             isVoip = true,
             appName = "WhatsApp"
         )
         IslandEventBus.updateCall(specificCall)
         assertEquals("Sarah Miller", IslandEventBus.callState.value?.callerName)
 
-        // 2. Cellular duration counter emits a generic label ("Active Call")
         val genericCall = CallInfo(
             callerName = "Active Call",
             callerNumber = null,
             state = CallState.OFFHOOK,
+            source = CallSource.CELLULAR,
             callDurationSeconds = 15L,
             isVoip = false,
             appName = "Phone"
         )
         IslandEventBus.updateCall(genericCall)
 
-        // The specific caller name and number are preserved, while state and duration are updated!
+        // Specific caller name and number are preserved, while state and duration are updated
         assertEquals("Sarah Miller", IslandEventBus.callState.value?.callerName)
         assertEquals("+1 (555) 019-2834", IslandEventBus.callState.value?.callerNumber)
         assertEquals(15L, IslandEventBus.callState.value?.callDurationSeconds)

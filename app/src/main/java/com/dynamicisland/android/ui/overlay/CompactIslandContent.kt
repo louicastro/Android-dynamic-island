@@ -122,7 +122,7 @@ fun CompactIslandContent(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "${currentState.battery.level}%",
+                            text = currentState.battery.displayPercentage,
                             color = AppleGreen,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -244,7 +244,7 @@ fun CompactIslandContent(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "${currentState.battery.level}%",
+                            text = currentState.battery.displayPercentage,
                             color = AppleGreen,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -265,7 +265,7 @@ fun CompactIslandContent(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "${currentState.battery.level}% Low",
+                            text = "${currentState.battery.displayPercentage} Low",
                             color = AppleRed,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold

@@ -90,23 +90,42 @@ fun ExpandedIslandContent(
             }
 
             is IslandState.ExpandedCall -> {
+                var callErrorMessage by remember { mutableStateOf<String?>(null) }
                 ExpandedCallView(
                     call = state.call,
+                    errorMessage = callErrorMessage,
                     onAnswer = {
+                        callErrorMessage = null
                         if (state.call.answerIntent != null) {
-                            try { state.call.answerIntent.send() } catch (e: Exception) { e.printStackTrace() }
+                            try {
+                                state.call.answerIntent.send()
+                            } catch (e: Exception) {
+                                callErrorMessage = "Failed to answer: ${e.message}"
+                            }
                         } else {
-                            callTracker.answerCall()
+                            val res = callTracker.answerCall()
+                            if (!res.success) {
+                                callErrorMessage = res.errorReason
+                            }
                         }
-                        onDismissRequest()
                     },
                     onDecline = {
+                        callErrorMessage = null
                         if (state.call.declineIntent != null) {
-                            try { state.call.declineIntent.send() } catch (e: Exception) { e.printStackTrace() }
+                            try {
+                                state.call.declineIntent.send()
+                                onDismissRequest()
+                            } catch (e: Exception) {
+                                callErrorMessage = "Failed to end call: ${e.message}"
+                            }
                         } else {
-                            callTracker.endCall()
+                            val res = callTracker.endCall()
+                            if (res.success) {
+                                onDismissRequest()
+                            } else {
+                                callErrorMessage = res.errorReason
+                            }
                         }
-                        onDismissRequest()
                     }
                 )
             }
@@ -518,6 +537,7 @@ private fun ExpandedNotificationView(
 @Composable
 private fun ExpandedCallView(
     call: com.dynamicisland.android.model.CallInfo,
+    errorMessage: String? = null,
     onAnswer: () -> Unit,
     onDecline: () -> Unit
 ) {
@@ -573,6 +593,17 @@ private fun ExpandedCallView(
                     fontSize = 12.sp
                 )
             }
+        }
+
+        if (errorMessage != null) {
+            Text(
+                text = errorMessage,
+                color = Color(0xFFFF453A),
+                fontSize = 11.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
         }
 
         Row(
@@ -646,7 +677,7 @@ private fun ExpandedBatteryView(
 
         Column {
             Text(
-                text = "${battery.level}% Charged",
+                text = "${battery.displayPercentage} Charged",
                 color = Color.White,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -795,7 +826,7 @@ private fun ExpandedLowBatteryView(
 
             Column {
                 Text(
-                    text = "Low Battery (${battery.level}%)",
+                    text = "Low Battery (${battery.displayPercentage})",
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold

@@ -2,6 +2,8 @@ package com.dynamicisland.android.service
 
 import com.dynamicisland.android.model.BatteryInfo
 import com.dynamicisland.android.model.CallInfo
+import com.dynamicisland.android.model.CallSource
+import com.dynamicisland.android.model.CallState
 import com.dynamicisland.android.model.IslandEvent
 import com.dynamicisland.android.model.MediaInfo
 import com.dynamicisland.android.model.NotificationItem
@@ -12,13 +14,16 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.UUID
 
 /**
  * Authoritative event bus and state repository connecting notification, media,
- * call, battery, and timer trackers to the island presentation layer.
+ * call, battery, and timer subsystems to the island presentation layer.
  *
- * Uses StateFlow for persistent states and replay = 0 for transient events to prevent
- * stale toasts from replaying on new collectors.
+ * Implements:
+ * - Multi-source call tracking (preventing notification removals from clearing cellular calls)
+ * - Strict replay = 0 for transient events with explicit unique event IDs
+ * - Reconciled notification map operations for silent startup synchronization
  */
 object IslandEventBus {
 
@@ -29,6 +34,8 @@ object IslandEventBus {
     private val _mediaState = MutableStateFlow<MediaInfo?>(null)
     val mediaState: StateFlow<MediaInfo?> = _mediaState.asStateFlow()
 
+    // Multi-source active calls (CELLULAR, VOIP)
+    private val activeCalls = mutableMapOf<CallSource, CallInfo>()
     private val _callState = MutableStateFlow<CallInfo?>(null)
     val callState: StateFlow<CallInfo?> = _callState.asStateFlow()
 
@@ -56,16 +63,19 @@ object IslandEventBus {
     }
 
     /**
-     * Updates call state while intelligently merging with existing caller identity
-     * to prevent generic cellular timer loops from overwriting notification-provided names/avatars.
+     * Updates call state for a specific call source (CELLULAR or VOIP).
+     * Intelligently merges incoming call details with existing records to preserve
+     * caller identity (names, phone numbers, avatars) and monotonic duration timestamps.
      */
+    @Synchronized
     fun updateCall(call: CallInfo?) {
         if (call == null) {
+            activeCalls.clear()
             _callState.value = null
             return
         }
 
-        val previous = _callState.value
+        val previous = activeCalls[call.source] ?: _callState.value
         val merged = if (previous != null) {
             val isIncomingNameGeneric = call.callerName.isNullOrBlank() ||
                     call.callerName == "Cellular Call" ||
@@ -79,11 +89,18 @@ object IslandEventBus {
                 call.callerName
             }
 
+            val resolvedStartTimestamp = if (call.callStartElapsedRealtime > 0L) {
+                call.callStartElapsedRealtime
+            } else {
+                previous.callStartElapsedRealtime
+            }
+
             call.copy(
                 callerName = resolvedName,
                 callerNumber = call.callerNumber ?: previous.callerNumber,
                 avatar = call.avatar ?: previous.avatar,
-                isVoip = if (call.isVoip) true else previous.isVoip,
+                callStartElapsedRealtime = resolvedStartTimestamp,
+                isVoip = if (call.source == CallSource.VOIP) true else call.isVoip,
                 appName = call.appName ?: previous.appName,
                 answerIntent = call.answerIntent ?: previous.answerIntent,
                 declineIntent = call.declineIntent ?: previous.declineIntent
@@ -92,8 +109,32 @@ object IslandEventBus {
             call
         }
 
-        _callState.value = merged
-        _transientEvents.tryEmit(IslandEvent.CallUpdate(merged))
+        activeCalls[call.source] = merged
+        resolveAuthoritativeCall()
+    }
+
+    /**
+     * Removes call state for a specific source.
+     * Prevents a notification dismissal for a VoIP app from clearing an active cellular call.
+     */
+    @Synchronized
+    fun removeCallBySource(source: CallSource) {
+        activeCalls.remove(source)
+        resolveAuthoritativeCall()
+        _transientEvents.tryEmit(IslandEvent.CallRemoved(source))
+    }
+
+    @Synchronized
+    private fun resolveAuthoritativeCall() {
+        // Priority: Ringing call > Active offhook call > null
+        val ringing = activeCalls.values.firstOrNull { it.state == CallState.RINGING }
+        val offhook = activeCalls.values.firstOrNull { it.state == CallState.OFFHOOK }
+        val authoritative = ringing ?: offhook
+
+        _callState.value = authoritative
+        if (authoritative != null) {
+            _transientEvents.tryEmit(IslandEvent.CallUpdate(authoritative))
+        }
     }
 
     fun updateTimer(timer: TimerInfo?) {
@@ -102,18 +143,32 @@ object IslandEventBus {
     }
 
     /**
-     * Seeds initial notifications into the persistent state without triggering
-     * transient alert toasts.
+     * Seeds or updates an active notification without triggering a transient alert toast.
      */
-    fun seedNotification(notification: NotificationItem) {
+    fun upsertActiveNotification(notification: NotificationItem) {
         val updated = _activeNotifications.value.toMutableMap()
         updated[notification.key] = notification
         _activeNotifications.value = updated
     }
 
+    fun seedNotification(notification: NotificationItem) {
+        upsertActiveNotification(notification)
+    }
+
     /**
-     * Seeds a batch of existing active notifications without triggering toast animations.
+     * Reconciles the active notifications map with the system tray snapshot on listener connect.
+     * Prunes stale items and quietly seeds active ones without triggering toast animations.
      */
+    fun reconcileActiveNotifications(currentKeys: Set<String>, updatedItems: List<NotificationItem>) {
+        val updated = mutableMapOf<String, NotificationItem>()
+        for (item in updatedItems) {
+            if (currentKeys.contains(item.key)) {
+                updated[item.key] = item
+            }
+        }
+        _activeNotifications.value = updated
+    }
+
     fun seedActiveNotifications(notifications: List<NotificationItem>) {
         val updated = _activeNotifications.value.toMutableMap()
         for (item in notifications) {
@@ -123,14 +178,14 @@ object IslandEventBus {
     }
 
     /**
-     * Posts a new incoming notification, updating the persistent map and triggering
-     * an alert toast event.
+     * Posts a new incoming notification, updating persistent state and emitting
+     * a transient toast alert event.
      */
-    fun postNotification(notification: NotificationItem) {
+    fun postNotification(notification: NotificationItem, eventId: String = UUID.randomUUID().toString()) {
         val updated = _activeNotifications.value.toMutableMap()
         updated[notification.key] = notification
         _activeNotifications.value = updated
-        _transientEvents.tryEmit(IslandEvent.NotificationPosted(notification))
+        _transientEvents.tryEmit(IslandEvent.NotificationPosted(notification, eventId))
     }
 
     fun removeNotification(key: String) {
@@ -149,8 +204,9 @@ object IslandEventBus {
             is IslandEvent.BatteryUpdate -> updateBattery(event.battery)
             is IslandEvent.MediaUpdate -> updateMedia(event.media)
             is IslandEvent.CallUpdate -> updateCall(event.call)
+            is IslandEvent.CallRemoved -> removeCallBySource(event.source)
             is IslandEvent.TimerUpdate -> updateTimer(event.timer)
-            is IslandEvent.NotificationPosted -> postNotification(event.notification)
+            is IslandEvent.NotificationPosted -> postNotification(event.notification, event.eventId)
             is IslandEvent.NotificationRemoved -> removeNotification(event.key)
             else -> emitTransient(event)
         }

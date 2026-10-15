@@ -8,24 +8,14 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import com.dynamicisland.android.model.CutoutType
 
+/**
+ * Utility for querying physical display cutout bounds and computing
+ * relative alignment offsets based on measured hardware geometry.
+ */
 object DisplayCutoutHelper {
 
     /**
-     * Attempts to detect the physical camera cutout position on the device screen.
-     */
-    fun detectCutoutType(context: Context): CutoutType {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            return CutoutType.CENTER_PUNCH_HOLE
-        }
-
-        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-            ?: return CutoutType.CENTER_PUNCH_HOLE
-
-        return CutoutType.CENTER_PUNCH_HOLE
-    }
-
-    /**
-     * Extracts cutout rect from WindowInsets when available.
+     * Extracts physical camera cutout bounds from WindowInsets when available.
      */
     fun extractCutoutBounds(windowInsets: WindowInsets?): Rect? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && windowInsets != null) {
@@ -38,13 +28,41 @@ object DisplayCutoutHelper {
     }
 
     /**
-     * Calculates the horizontal offset in DP based on cutout position relative to screen center.
+     * Detects cutout position preset based on hardware cutout bounds.
      */
-    fun calculateHorizontalOffsetDp(cutoutBounds: Rect, screenWidthPx: Int, density: Float): Int {
+    fun detectCutoutTypeFromBounds(cutoutBounds: Rect?, screenWidthPx: Int): CutoutType {
+        if (cutoutBounds == null) return CutoutType.CENTER_PUNCH_HOLE
+        val centerX = cutoutBounds.centerX()
+        val oneThirdWidth = screenWidthPx / 3
+        val twoThirdsWidth = (screenWidthPx * 2) / 3
+
+        return when {
+            centerX < oneThirdWidth -> CutoutType.LEFT_PUNCH_HOLE
+            centerX > twoThirdsWidth -> CutoutType.RIGHT_PUNCH_HOLE
+            else -> CutoutType.CENTER_PUNCH_HOLE
+        }
+    }
+
+    /**
+     * Calculates hardware-measured base offsets (X, Y) in DP so user calibration
+     * acts as micro-adjustments relative to the real camera punch-hole.
+     */
+    fun getHardwareBaseOffsetsDp(
+        cutoutBounds: Rect?,
+        screenWidthPx: Int,
+        density: Float
+    ): Pair<Int, Int> {
+        if (cutoutBounds == null || density <= 0f) return Pair(0, 8)
+
         val cutoutCenterX = cutoutBounds.centerX()
         val screenCenterX = screenWidthPx / 2
-        val diffPx = cutoutCenterX - screenCenterX
-        return (diffPx / density).toInt()
+        val diffXPx = cutoutCenterX - screenCenterX
+        val diffXDp = (diffXPx / density).toInt()
+
+        // Position pill vertically centered around cutout
+        val cutoutCenterY = cutoutBounds.centerY()
+        val baseYDp = (cutoutCenterY / density).toInt().coerceAtLeast(4)
+
+        return Pair(diffXDp, baseYDp)
     }
 }
-
