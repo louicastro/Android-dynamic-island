@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="island_black">#FF000000</color>
+    <color name="island_surface">#FF121212</color>
+    <color name="island_accent">#FF0A84FF</color>
+    <color name="island_green">#FF30D158</color>
+    <color name="island_red">#FFFF453A</color>
+    <color name="island_orange">#FFFF9F0A</color>
+    <color name="island_text_primary">#FFFFFFFF</color>
+    <color name="island_text_secondary">#99EBEBF5</color>
+    <color name="island_divider">#26FFFFFF</color>
+
+    <!-- Material theme base colors -->
+    <color name="purple_80">#D0BCFF</color>
+    <color name="purple_grey_80">#CCC2DC</color>
+    <color name="pink_80">#EFB8C8</color>
+    <color name="purple_40">#6650a4</color>
+    <color name="purple_grey_40">#625b71</color>
+    <color name="pink_40">#7D5260</color>
+</resources>

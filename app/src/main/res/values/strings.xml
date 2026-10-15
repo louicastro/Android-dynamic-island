@@ -1,0 +1,39 @@
+<resources>
+    <string name="app_name">Dynamic Island</string>
+    <string name="notification_listener_label">Dynamic Island Notification Service</string>
+    <string name="service_notification_title">Dynamic Island is Active</string>
+    <string name="service_notification_text">Monitoring live media, notifications, and battery status</string>
+    <string name="service_channel_name">Dynamic Island Background Service</string>
+    <string name="service_channel_desc">Keeps the Dynamic Island overlay active on your screen</string>
+
+    <!-- Settings Labels -->
+    <string name="settings_title">Dynamic Island Settings</string>
+    <string name="status_enabled">Overlay Active</string>
+    <string name="status_disabled">Overlay Inactive</string>
+    <string name="permission_overlay_title">Display Over Other Apps</string>
+    <string name="permission_overlay_desc">Allows Dynamic Island to float over your status bar and apps.</string>
+    <string name="permission_notification_title">Notification Access</string>
+    <string name="permission_notification_desc">Reads incoming notifications and active music playback.</string>
+    <string name="permission_phone_title">Phone State Access</string>
+    <string name="permission_phone_desc">Detects incoming calls and shows caller information.</string>
+    <string name="permission_grant">Grant Permission</string>
+    <string name="permission_granted">Granted</string>
+
+    <string name="section_positioning">Cutout &amp; Positioning</string>
+    <string name="cutout_center">Center Hole Punch</string>
+    <string name="cutout_left">Left Hole Punch</string>
+    <string name="cutout_right">Right Hole Punch</string>
+    <string name="cutout_notch">Waterdrop / Notch</string>
+    <string name="cutout_custom">Custom Offset</string>
+
+    <string name="section_features">Active Features</string>
+    <string name="feature_music">Music Player &amp; Waveform</string>
+    <string name="feature_notifications">Live Notification Banners</string>
+    <string name="feature_calls">Incoming Call Alerts</string>
+    <string name="feature_battery">Charging &amp; Battery Status</string>
+
+    <string name="section_appearance">Appearance &amp; Physics</string>
+    <string name="theme_black">AMOLED Black</string>
+    <string name="theme_frosted">Frosted Blur</string>
+    <string name="calibrate_button">Interactive Calibrator</string>
+</resources>

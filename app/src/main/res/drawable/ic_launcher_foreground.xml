@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.9"
+        android:scaleY="0.9"
+        android:translateX="5.4"
+        android:translateY="5.4">
+        <!-- Outer Glowing Pill -->
+        <path
+            android:fillColor="#1E1E24"
+            android:strokeColor="#0A84FF"
+            android:strokeWidth="1.5"
+            android:pathData="M 30,44 L 78,44 A 10,10 0 0 1 88,54 A 10,10 0 0 1 78,64 L 30,64 A 10,10 0 0 1 20,54 A 10,10 0 0 1 30,44 Z" />
+
+        <!-- Camera Cutout Dot -->
+        <path
+            android:fillColor="#000000"
+            android:pathData="M 31,54 m -4,0 a 4,4 0 1,0 8,0 a 4,4 0 1,0 -8,0" />
+
+        <!-- Sound Bars inside Pill -->
+        <path
+            android:fillColor="#30D158"
+            android:pathData="M 68,50 L 70,50 L 70,58 L 68,58 Z" />
+        <path
+            android:fillColor="#30D158"
+            android:pathData="M 72,47 L 74,47 L 74,61 L 72,61 Z" />
+        <path
+            android:fillColor="#30D158"
+            android:pathData="M 76,51 L 78,51 L 78,57 L 76,57 Z" />
+    </group>
+</vector>
