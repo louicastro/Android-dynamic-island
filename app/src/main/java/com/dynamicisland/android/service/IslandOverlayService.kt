@@ -1,15 +1,14 @@
 package com.dynamicisland.android.service
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.graphics.PixelFormat
-import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.runtime.collectAsState
@@ -22,15 +21,9 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.dynamicisland.android.DynamicIslandApp
 import com.dynamicisland.android.R
 import com.dynamicisland.android.data.SettingsRepository
-import com.dynamicisland.android.model.CallState
 import com.dynamicisland.android.model.CutoutType
-import com.dynamicisland.android.model.IslandEvent
 import com.dynamicisland.android.model.IslandSettings
 import com.dynamicisland.android.model.IslandState
-import com.dynamicisland.android.model.MediaInfo
-import com.dynamicisland.android.model.NotificationItem
-import com.dynamicisland.android.model.BatteryInfo
-import com.dynamicisland.android.model.CallInfo
 import com.dynamicisland.android.ui.overlay.IslandOverlayHost
 import com.dynamicisland.android.ui.settings.MainActivity
 import com.dynamicisland.android.util.WindowUtils
@@ -38,15 +31,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Foreground Service responsible for WindowManager lifecycle, system overlay view attachment,
+ * dynamic layout sizing, and hardware window insets.
+ *
+ * State prioritization and event reduction are delegated to [IslandStateManager].
+ */
 class IslandOverlayService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private lateinit var windowManager: WindowManager
     private lateinit var settingsRepository: SettingsRepository
+    private lateinit var stateManager: IslandStateManager
 
     private var composeView: ComposeView? = null
     private val overlayLifecycleOwner = OverlayLifecycleOwner()
@@ -54,36 +54,28 @@ class IslandOverlayService : Service() {
     private var batteryTracker: BatteryTracker? = null
     private var callTracker: CallTracker? = null
 
-    // Subsystem States
-    private var currentMedia: MediaInfo? = null
-    private var currentCall: CallInfo? = null
-    private var currentBattery: BatteryInfo? = null
-    private var currentNotificationToast: NotificationItem? = null
-    private var currentChargingToast: BatteryInfo? = null
-    private var currentTimer: com.dynamicisland.android.model.TimerInfo? = null
-    private var currentRingerToast: Boolean? = null
-    private var currentBluetoothDevice: Pair<String, Int?>? = null
-    private var isExpandedManually: Boolean = false
-
-    private val _currentState = MutableStateFlow<IslandState>(IslandState.Idle)
-    val currentState = _currentState.asStateFlow()
-
     private var currentLayoutParams: WindowManager.LayoutParams? = null
+    private var isViewAttached: Boolean = false
+    private var attachRetryCount = 0
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         settingsRepository = SettingsRepository.getInstance(this)
+        stateManager = IslandStateManager(settingsRepository, IslandEventBus, serviceScope)
 
         startForegroundNotification()
 
         overlayLifecycleOwner.onCreate()
         overlayLifecycleOwner.onResume()
 
-        setupTrackers()
-        observeEvents()
-        observeSettings()
+        // 1. Subscribe to state and settings BEFORE starting event-producing trackers
+        observeStateAndSettings()
 
+        // 2. Start hardware trackers now that collectors are active
+        setupTrackers()
+
+        // 3. Attach overlay window to WindowManager
         attachOverlayView()
     }
 
@@ -111,191 +103,41 @@ class IslandOverlayService : Service() {
 
     private fun setupTrackers() {
         batteryTracker = BatteryTracker(this).apply { start() }
-        callTracker = CallTracker(this).apply { start() }
+        callTracker = CallTracker.getInstance(this).apply { start() }
     }
 
-    private fun observeEvents() {
+    private fun observeStateAndSettings() {
         serviceScope.launch {
-            IslandEventBus.events.collect { event ->
-                handleIslandEvent(event)
+            stateManager.currentState.collect { state ->
+                val settings = settingsRepository.getSettings()
+                if (settings.isEnabled && isViewAttached) {
+                    updateWindowDimensions(state, settings)
+                }
             }
         }
-    }
 
-    private fun observeSettings() {
         serviceScope.launch {
             settingsRepository.settingsFlow.collect { settings ->
                 if (!settings.isEnabled) {
                     composeView?.visibility = android.view.View.GONE
                 } else {
                     composeView?.visibility = android.view.View.VISIBLE
-                    updateWindowDimensions(_currentState.value, settings)
-                }
-            }
-        }
-    }
-
-    private fun handleIslandEvent(event: IslandEvent) {
-        val settings = settingsRepository.getSettings()
-
-        when (event) {
-            is IslandEvent.MediaUpdate -> {
-                currentMedia = if (settings.enableMusic) event.media else null
-                recomputeState()
-            }
-
-            is IslandEvent.NotificationPosted -> {
-                if (settings.enableNotifications) {
-                    currentNotificationToast = event.notification
-                    recomputeState()
-                }
-            }
-
-            is IslandEvent.NotificationRemoved -> {
-                if (currentNotificationToast?.key == event.key) {
-                    currentNotificationToast = null
-                    recomputeState()
-                }
-            }
-
-            is IslandEvent.CallUpdate -> {
-                currentCall = if (settings.enableCalls) event.call else null
-                recomputeState()
-            }
-
-            is IslandEvent.BatteryUpdate -> {
-                if (settings.enableBattery) {
-                    val wasCharging = currentBattery?.isCharging == true
-                    currentBattery = event.battery
-                    if (event.battery.isCharging && !wasCharging) {
-                        currentChargingToast = event.battery
-                    }
-                    recomputeState()
-                }
-            }
-
-            is IslandEvent.TimerUpdate -> {
-                currentTimer = if (settings.enableTimer) event.timer else null
-                recomputeState()
-            }
-
-            is IslandEvent.RingerModeToggle -> {
-                if (settings.enableRinger) {
-                    currentRingerToast = event.isMuted
-                    recomputeState()
-                }
-            }
-
-            is IslandEvent.BluetoothConnect -> {
-                currentBluetoothDevice = Pair(event.deviceName, event.batteryLevel)
-                recomputeState()
-            }
-
-            is IslandEvent.TapPill -> {
-                isExpandedManually = !isExpandedManually
-                recomputeState()
-            }
-
-            is IslandEvent.LongPressPill -> {
-                // Open source app if available
-                currentNotificationToast?.contentIntent?.let {
-                    try {
-                        it.send()
-                    } catch (e: Exception) {
-                        // Ignored
+                    if (!isViewAttached) {
+                        attachOverlayView()
+                    } else {
+                        updateWindowDimensions(stateManager.currentState.value, settings)
                     }
                 }
             }
-
-            is IslandEvent.DismissExpanded -> {
-                isExpandedManually = false
-                currentNotificationToast = null
-                currentChargingToast = null
-                currentRingerToast = null
-                currentBluetoothDevice = null
-                recomputeState()
-            }
-
-            is IslandEvent.ToastTimeout -> {
-                currentNotificationToast = null
-                currentChargingToast = null
-                currentRingerToast = null
-                currentBluetoothDevice = null
-                recomputeState()
-            }
         }
-    }
-
-    private fun recomputeState() {
-        val settings = settingsRepository.getSettings()
-
-        val newState: IslandState = when {
-            // High priority: Incoming call
-            currentCall?.state == CallState.RINGING -> {
-                if (isExpandedManually) IslandState.ExpandedCall(currentCall!!)
-                else IslandState.CompactCall(currentCall!!)
-            }
-
-            // In-call active
-            currentCall?.state == CallState.OFFHOOK -> {
-                if (isExpandedManually) IslandState.ExpandedCall(currentCall!!)
-                else IslandState.CompactCall(currentCall!!)
-            }
-
-            // Charging toast alert
-            currentRingerToast != null -> {
-                if (isExpandedManually) IslandState.ExpandedRinger(currentRingerToast!!)
-                else IslandState.RingerToast(currentRingerToast!!)
-            }
-
-            currentBluetoothDevice != null -> {
-                IslandState.BluetoothToast(currentBluetoothDevice!!.first, currentBluetoothDevice!!.second)
-            }
-
-            currentChargingToast != null -> {
-                if (isExpandedManually) IslandState.ExpandedBattery(currentChargingToast!!)
-                else IslandState.ChargingToast(currentChargingToast!!)
-            }
-
-            // Notification alert
-            currentNotificationToast != null -> {
-                if (isExpandedManually) IslandState.ExpandedNotification(currentNotificationToast!!)
-                else IslandState.NotificationToast(currentNotificationToast!!)
-            }
-
-            // Active Timer
-            currentTimer != null -> {
-                if (isExpandedManually) IslandState.ExpandedTimer(currentTimer!!)
-                else IslandState.CompactTimer(currentTimer!!)
-            }
-
-            // Split island: Music playing + battery plugged in
-            currentMedia != null && currentMedia!!.isPlaying && currentBattery != null && currentBattery!!.isCharging -> {
-                if (isExpandedManually) {
-                    IslandState.ExpandedMusic(currentMedia!!)
-                } else {
-                    IslandState.SplitIsland(
-                        primaryState = IslandState.CompactMusic(currentMedia!!),
-                        secondaryState = IslandState.CompactBattery(currentBattery!!)
-                    )
-                }
-            }
-
-            // Music playing
-            currentMedia != null && currentMedia!!.isPlaying -> {
-                if (isExpandedManually) IslandState.ExpandedMusic(currentMedia!!)
-                else IslandState.CompactMusic(currentMedia!!)
-            }
-
-            // Idle or minimal cutout
-            else -> IslandState.Idle
-        }
-
-        _currentState.value = newState
-        updateWindowDimensions(newState, settings)
     }
 
     private fun attachOverlayView() {
+        if (!Settings.canDrawOverlays(this)) {
+            // Cannot attach if overlay permission is missing
+            return
+        }
+
         val settings = settingsRepository.getSettings()
 
         val widthPx = WindowUtils.dpToPx(this, settings.compactWidthDp + 24)
@@ -310,16 +152,16 @@ class IslandOverlayService : Service() {
             setViewTreeSavedStateRegistryOwner(overlayLifecycleOwner)
 
             setContent {
-                val state by _currentState.collectAsState()
+                val state by stateManager.currentState.collectAsState()
                 val currentSettings by settingsRepository.settingsFlow.collectAsState()
 
                 IslandOverlayHost(
                     state = state,
                     settings = currentSettings,
-                    onTap = { handleIslandEvent(IslandEvent.TapPill) },
-                    onLongPress = { handleIslandEvent(IslandEvent.LongPressPill) },
-                    onDismissRequest = { handleIslandEvent(IslandEvent.DismissExpanded) },
-                    onAutoDismissToast = { handleIslandEvent(IslandEvent.ToastTimeout) }
+                    onTap = { stateManager.handleUserTap() },
+                    onLongPress = { handleLongPress() },
+                    onDismissRequest = { stateManager.handleDismiss() },
+                    onAutoDismissToast = { stateManager.handleToastTimeout() }
                 )
             }
         }
@@ -328,14 +170,48 @@ class IslandOverlayService : Service() {
 
         try {
             windowManager.addView(view, params)
+            isViewAttached = true
+            attachRetryCount = 0
         } catch (e: Exception) {
             e.printStackTrace()
+            isViewAttached = false
+            // Exponential backoff recovery for window manager failures (up to 3 retries)
+            if (attachRetryCount < 3) {
+                attachRetryCount++
+                mainHandler.postDelayed({ attachOverlayView() }, (attachRetryCount * 1000).toLong())
+            }
+        }
+    }
+
+    private fun handleLongPress() {
+        // Open the active content source if available
+        val state = stateManager.currentState.value
+        when (state) {
+            is IslandState.ExpandedNotification -> {
+                state.notification.contentIntent?.let {
+                    try { it.send() } catch (e: Exception) { e.printStackTrace() }
+                }
+            }
+            is IslandState.NotificationToast -> {
+                state.notification.contentIntent?.let {
+                    try { it.send() } catch (e: Exception) { e.printStackTrace() }
+                }
+            }
+            is IslandState.ExpandedMusic -> {
+                val launchIntent = packageManager.getLaunchIntentForPackage(state.media.packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launchIntent)
+                }
+            }
+            else -> Unit
         }
     }
 
     private fun updateWindowDimensions(state: IslandState, settings: IslandSettings) {
         val view = composeView ?: return
         val params = currentLayoutParams ?: return
+        if (!isViewAttached) return
 
         val widthDp = when {
             state.isExpanded -> settings.expandedWidthDp + 24
@@ -349,11 +225,8 @@ class IslandOverlayService : Service() {
             else -> settings.compactHeightDp + 16
         }
 
-        val widthPx = WindowUtils.dpToPx(this, widthDp)
-        val heightPx = WindowUtils.dpToPx(this, heightDp)
-
-        params.width = widthPx
-        params.height = heightPx
+        params.width = WindowUtils.dpToPx(this, widthDp)
+        params.height = WindowUtils.dpToPx(this, heightDp)
         params.x = WindowUtils.dpToPx(this, settings.xOffsetDp)
         params.y = WindowUtils.dpToPx(this, settings.yOffsetDp)
 
@@ -366,7 +239,8 @@ class IslandOverlayService : Service() {
         try {
             windowManager.updateViewLayout(view, params)
         } catch (e: Exception) {
-            // View may not be attached yet
+            // View may have been detached or window token changed
+            isViewAttached = false
         }
     }
 
@@ -374,15 +248,19 @@ class IslandOverlayService : Service() {
         super.onDestroy()
         batteryTracker?.stop()
         callTracker?.stop()
+        stateManager.cleanup()
 
         composeView?.let {
             try {
-                windowManager.removeView(it)
+                if (isViewAttached) {
+                    windowManager.removeView(it)
+                }
             } catch (e: Exception) {
-                // Ignore
+                // Ignore cleanup error
             }
         }
         composeView = null
+        isViewAttached = false
 
         overlayLifecycleOwner.onDestroy()
         serviceScope.cancel()

@@ -15,11 +15,9 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repository: SettingsRepository
 
-    private val phonePermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            if (isGranted) {
-                restartIslandService()
-            }
+    private val phonePermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            restartIslandService()
         }
 
     private val notificationPermissionLauncher =
@@ -48,7 +46,15 @@ class MainActivity : ComponentActivity() {
                         PermissionHelper.openNotificationListenerSettings(this)
                     },
                     onRequestPhonePermission = {
-                        phonePermissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+                        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            arrayOf(
+                                Manifest.permission.READ_PHONE_STATE,
+                                Manifest.permission.ANSWER_PHONE_CALLS
+                            )
+                        } else {
+                            arrayOf(Manifest.permission.READ_PHONE_STATE)
+                        }
+                        phonePermissionsLauncher.launch(permissions)
                     },
                     onRestartService = {
                         restartIslandService()

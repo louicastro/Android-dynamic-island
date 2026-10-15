@@ -5,212 +5,139 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.20-purple.svg)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202024.09.02-4285F4.svg)](https://developer.android.com/jetpack/compose)
 
-A completely new, open-source Android application inspired by Apple's Dynamic Island, engineered from scratch using modern Android development practices, **Jetpack Compose**, **Kotlin Coroutines/StateFlow**, and **native Android APIs**.
+A completely new, open-source Android application inspired by Apple's Dynamic Island, engineered from scratch using modern Android development practices: **Jetpack Compose** (running directly inside a native `WindowManager` overlay), **Kotlin Coroutines & StateFlow**, a dedicated **State Reducer architecture**, and **Android system APIs**.
 
 ---
 
-## ✨ Features
+## ✨ Features & Implementation Details
 
 - **Fluid Spring Physics & Morphing Pill**:
   - Seamlessly morphs between **Idle**, **Compact Pill**, **Multi-tasking Split Bubble**, and **Expanded Interactive Card**.
-  - Tunable spring stiffness and damping ratio for natural, organic bounce.
-  - Haptic feedback integration mimicking Apple's tactile ticks on tap and swipe.
+  - Tunable spring stiffness and damping ratio (`Spring.StiffnessMediumLow`, `Spring.DampingRatioLowBouncy`) for organic bounce.
+  - Haptic feedback integration mimicking tactile clicks on tap, expand, and swipe gestures.
 - **Active Music Playback & Audio Visualizer**:
   - Integrates with Android's native `MediaSessionManager` and `MediaController`.
-  - Works with Spotify, YouTube Music, Apple Music, SoundCloud, Podcasts, and system players.
-  - Displays high-resolution album art, track title, artist name, and interactive progress scrubber.
+  - Discovers active sessions across Spotify, YouTube Music, Apple Music, SoundCloud, and podcast players.
+  - Displays high-resolution album art, track title, artist name, and an interactive progress scrubber.
   - Real-time animated audio equalizer waveform reflecting live playback state.
-- **Live Notifications & Heads-Up Alerts**:
-  - Non-intrusive notification previews powered by `NotificationListenerService`.
-  - App badges, sender identity, and message snippets.
-  - Interactive action buttons (Reply, Mark as Read, Dismiss, Open App).
-  - Intelligent spam filtering: suppresses background ongoing system notifications.
+- **Live Notifications with RemoteInput Direct Reply**:
+  - Non-intrusive notification previews powered by `DynamicNotificationListenerService`.
+  - **Inline Direct Reply**: Type responses directly in the expanded island card using Android `RemoteInput` without leaving your current app.
+  - **System Notification Dismissal**: Tapping "Dismiss" cancels the notification in the Android system notification tray via `cancelNotification(key)`.
+  - **Targeted Ongoing Filtering**: Retains critical ongoing updates (calls, timers, navigation, ride sharing) while suppressing silent system noise.
+  - **Memory Protection**: Bitmaps and notification icons are scaled and clamped (max 128x128) to prevent OutOfMemory issues on low-RAM devices (e.g. Samsung Galaxy A35).
+  - **Lock Screen Privacy**: Automatically redacts private message content when `KeyguardManager` reports the device is locked.
 - **Incoming & In-Call Indicators**:
-  - Detects phone calls across both standard carrier calls and VoIP services.
-  - Green telephone indicator in compact state with running duration timer (`MM:SS`).
-  - Expanded card with caller name, caller number, decline button, and answer controls.
+  - **VoIP Call Support**: Intercepts `Notification.CATEGORY_CALL` from WhatsApp, Telegram, Google Meet, and phone dialers, extracting caller name, avatar, and native Answer/Decline `PendingIntent`s.
+  - **Cellular Call Management**: Uses `TelephonyManager` / `TelephonyCallback` to monitor call states and duration, and `TelecomManager` (`acceptRingingCall()`, `endCall()`) on Android 9+ (API 28+) when `ANSWER_PHONE_CALLS` is granted.
+- **Active Timer & Clock Integration**:
+  - Tracks running timers and stopwatches from system Clock applications (Google Clock, Samsung Clock).
+  - Expanded timer card features actionable Pause and Resume buttons backed by the clock application's intents.
 - **Battery & Charging Status**:
   - Real-time charging animation displaying battery level and charging technology (*Fast Charging*, *Super Fast Charging*, *Wireless Charging*).
   - Low battery alerts with subtle color warnings.
 - **Multi-tasking Split Island**:
-  - When two simultaneous activities are active (e.g., Music playing while phone is charging), the island splits into a primary pill and a detached auxiliary circular bubble.
+  - When two simultaneous activities are active (e.g., Music playing while phone is charging or a timer is running), the island splits into a primary pill and an auxiliary detached circular bubble.
 - **Interactive Screen Cutout Calibrator**:
   - Live visual calibration tool with sliders for X-offset, Y-offset, compact width, compact height, and corner radius.
-  - Hardware cutout adaptation presets: **Center Punch Hole**, **Left Punch Hole**, **Right Punch Hole**, **Waterdrop Notch**, and **Custom Offset**.
-- **AMOLED & Frosted Glass Themes**:
-  - **AMOLED Pure Black** for zero battery consumption on OLED displays.
-  - **Frosted Glass Blur** with translucent subtle border glow.
-  - **Ambient Accent** adapting to album art and notification themes.
+  - Cutout presets: **Center Punch Hole**, **Left Punch Hole**, **Right Punch Hole**, **Waterdrop Notch**, and **Custom**.
 
 ---
 
-## 🏛️ Architecture Overview
+## 🏛️ Architecture & Reducer Pattern
 
-The app follows Clean Architecture principles and separates concerns into presentation, domain event dispatch, background services, and hardware abstraction.
+To prevent god-service anti-patterns, the architecture cleanly separates concerns into:
+1. **`IslandStateManager`**: Pure state reducer and state-holder responsible for event prioritization (Incoming Calls > In-Call > Timers > Toasts > Split Multi-tasking > Media > Idle).
+2. **`IslandEventBus`**: Authoritative `StateFlow` repository for persistent states (Battery, Media, Calls, Timers, Notifications) paired with a replay-buffered `SharedFlow` for transient gestures. Eliminates event loss regardless of collector startup timing.
+3. **`IslandOverlayService`**: Lightweight Android Foreground Service strictly managing `WindowManager` lifecycle, dynamic layout params updating, and `ComposeView` hosting.
 
 ```mermaid
 flowchart TD
-    subgraph System Integration & Hardware
-        NotifService["DynamicNotificationListenerService\n(NotificationListenerService)"]
+    subgraph Hardware & Android Subsystems
+        NotifService["DynamicNotificationListenerService\n(NotificationListenerService & RemoteInput)"]
         MediaTrack["MediaSessionTracker\n(MediaSessionManager)"]
-        CallTrack["CallTracker\n(TelephonyManager / TelephonyCallback)"]
-        BattTrack["BatteryTracker\n(BroadcastReceiver)"]
+        CallTrack["CallTracker\n(TelephonyManager & TelecomManager)"]
+        BattTrack["BatteryTracker\n(ACTION_BATTERY_CHANGED)"]
     end
 
     subgraph Reactive Core
-        EventBus["IslandEventBus\n(SharedFlow & StateFlow)"]
+        EventBus["IslandEventBus\n(Authoritative StateFlows + Replay Buffer)"]
+        StateManager["IslandStateManager\n(Dedicated State Reducer)"]
         SettingsRepo["SettingsRepository\n(SharedPreferences & StateFlow)"]
     end
 
     subgraph System Window Overlay
-        OverlayService["IslandOverlayService\n(Foreground Service)"]
+        OverlayService["IslandOverlayService\n(WindowManager & Error Recovery)"]
         WindowManager["Android WindowManager\n(TYPE_APPLICATION_OVERLAY)"]
-        LifecycleHost["OverlayLifecycleOwner\n(ViewTreeLifecycleOwner)"]
         ComposeOverlay["ComposeView\n(IslandOverlayHost)"]
     end
 
-    subgraph User Configuration UI
-        SettingsActivity["MainActivity & SettingsScreen\n(Jetpack Compose Material 3)"]
-        Calibrator["CutoutCalibrationView\n(Interactive Visual Calibrator)"]
-    end
+    NotifService -->|Notification, VoIP & Timers| EventBus
+    MediaTrack -->|Media Metadata & Playback| EventBus
+    CallTrack -->|Cellular Call & Telecom State| EventBus
+    BattTrack -->|Battery & Charge Level| EventBus
 
-    NotifService -->|Notification Events| EventBus
-    MediaTrack -->|Media Metadata & Playback State| EventBus
-    CallTrack -->|Call State & Timer| EventBus
-    BattTrack -->|Battery & Charging Status| EventBus
-
-    EventBus --> OverlayService
-    SettingsRepo --> OverlayService
-    SettingsRepo --> SettingsActivity
+    EventBus --> StateManager
+    SettingsRepo --> StateManager
+    StateManager -->|uiState: StateFlow| OverlayService
 
     OverlayService --> WindowManager
-    OverlayService --> LifecycleHost
-    LifecycleHost --> ComposeOverlay
     WindowManager --> ComposeOverlay
 ```
 
 ---
 
-## 📁 Project Structure
+## 🔒 Permissions & Android API Requirements
 
-```
-├── app/
-│   ├── build.gradle.kts                # App-level dependencies & Compose configuration
-│   ├── proguard-rules.pro              # Proguard optimization rules
-│   └── src/
-│       ├── main/
-│       │   ├── AndroidManifest.xml     # Permissions, foreground services, activities
-│       │   ├── java/com/dynamicisland/android/
-│       │   │   ├── DynamicIslandApp.kt # Application class & notification channels
-│       │   │   ├── data/
-│       │   │   │   └── SettingsRepository.kt       # Persistent settings with StateFlow
-│       │   │   ├── model/
-│       │   │   │   ├── BatteryInfo.kt              # Battery and charging data model
-│       │   │   │   ├── CallInfo.kt                 # Telephony state and timer model
-│       │   │   │   ├── IslandEvent.kt              # Event bus sealed class
-│       │   │   │   ├── IslandSettings.kt           # Positioning and customization models
-│       │   │   │   ├── IslandState.kt              # Visual state machine
-│       │   │   │   ├── MediaInfo.kt                # Music metadata and progress model
-│       │   │   │   └── NotificationItem.kt         # Notification model with action intents
-│       │   │   ├── service/
-│       │   │   │   ├── BatteryTracker.kt           # Battery state monitor
-│       │   │   │   ├── BootReceiver.kt             # Auto-start on boot receiver
-│       │   │   │   ├── CallTracker.kt              # Telephony state monitor
-│       │   │   │   ├── DynamicNotificationListenerService.kt # Notification listener
-│       │   │   │   ├── IslandEventBus.kt           # Reactive event bus singleton
-│       │   │   │   ├── IslandOverlayService.kt     # Master foreground overlay service
-│       │   │   │   ├── MediaSessionTracker.kt      # Media controller and playback manager
-│       │   │   │   └── OverlayLifecycleOwner.kt    # Lifecycle owner for overlay ComposeView
-│       │   │   ├── ui/
-│       │   │   │   ├── overlay/
-│       │   │   │   │   ├── AudioWaveformVisualizer.kt # Animated sound equalizer bars
-│       │   │   │   │   ├── CompactIslandContent.kt    # Compact pill content
-│       │   │   │   │   ├── ExpandedIslandContent.kt   # Interactive expanded cards
-│       │   │   │   │   ├── IslandOverlayHost.kt       # Root overlay container
-│       │   │   │   │   ├── IslandPillContainer.kt     # Spring physics and morphing logic
-│       │   │   │   │   └── SplitBubbleContent.kt      # Multitasking secondary bubble
-│       │   │   │   ├── settings/
-│       │   │   │   │   ├── CutoutCalibrationView.kt   # Screen alignment calibrator
-│       │   │   │   │   ├── MainActivity.kt            # Settings activity
-│       │   │   │   │   ├── PermissionHelper.kt        # System permission checkers
-│       │   │   │   │   └── SettingsScreen.kt          # Material 3 configuration screen
-│       │   │   │   └── theme/
-│       │   │   │       ├── Color.kt
-│       │   │   │       ├── Theme.kt
-│       │   │   │       └── Type.kt
-│       │   │   └── util/
-│       │   │       ├── AnimationSpecs.kt              # Spring curves and damping ratios
-│       │   │       ├── DisplayCutoutHelper.kt         # Android DisplayCutout parser
-│       │   │       └── WindowUtils.kt                 # WindowManager.LayoutParams utilities
-│       │   └── res/                                   # Drawables, themes, and layouts
-│       └── test/                                      # Unit tests for state machine & models
-├── gradle/
-│   ├── libs.versions.toml             # Gradle Version Catalog
-│   └── wrapper/                       # Gradle wrapper configuration
-├── build.gradle.kts                   # Root build configuration
-├── settings.gradle.kts                # Project structure & repositories
-├── gradlew                            # Gradle wrapper POSIX script
-├── gradlew.bat                        # Gradle wrapper Windows script
-├── BUILD.md                           # Comprehensive compilation manual
-├── CONTRIBUTING.md                    # Open-source contribution guidelines
-└── LICENSE                            # Apache 2.0 License
-```
+| Permission | Purpose | Notes |
+|:---|:---|:---|
+| `SYSTEM_ALERT_WINDOW` | Floats the island over system UI and apps. | Required on first launch. |
+| `BIND_NOTIFICATION_LISTENER_SERVICE` | Reads music metadata, notifications, and VoIP call actions. | Granted via System Notification Access. |
+| `READ_PHONE_STATE` | Monitors incoming cellular call status and call duration. | Standard runtime permission. |
+| `ANSWER_PHONE_CALLS` | Enables answering and ending cellular calls via `TelecomManager`. | Android 9+ (API 28+). Optional. |
+| `READ_CONTACTS` | Resolves caller name from phone number for cellular calls. | Optional. |
+| `FOREGROUND_SERVICE` | Keeps overlay responsive in the background. | Android standard foreground service. |
+| `VIBRATE` | Provides subtle haptic feedback when interacting with the pill. | |
+
+> **Note on Call Answering**: Answering VoIP calls (WhatsApp, Telegram) is handled via the app's native notification `PendingIntent`. Cellular call control requires Android 9+ and `android.permission.ANSWER_PHONE_CALLS`.
 
 ---
 
-## 🚀 Getting Started
+## ⚡ Performance, Memory, and Device Compatibility
+
+- **Zero Idle CPU**: When no audio is playing and no alert is active, the overlay enters a dormant idle state without active redraw loops.
+- **Dynamic Touch Window Sizing**: The `WindowManager.LayoutParams` bounding box automatically shrinks to the compact pill size when collapsed, allowing touches outside the island to pass through seamlessly to foreground apps.
+- **Clamped Image Allocation**: All notification icons and album arts are scaled down to 128x128 pixels to protect against OutOfMemory exceptions on budget and mid-range devices (e.g., Samsung Galaxy A-series).
+- **Tested Device Formats**: Center punch-hole (Pixel, Galaxy S/A series), Left punch-hole (OnePlus, Xiaomi), Right punch-hole (Galaxy S10), and waterdrop notches.
+
+---
+
+## 🚀 Build & Compilation
 
 ### Requirements
 - **JDK 17 or JDK 21**
 - **Android SDK Platform 35 (Android 15)**
 - **Android Studio Koala / Ladybug or Gradle 8.7+**
 
-### Step-by-Step Compilation
+### Command Line
+```bash
+# Run unit tests
+./gradlew test
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/your-username/dynamic-island-android.git
-   cd dynamic-island-android
-   ```
+# Build Debug APK
+./gradlew assembleDebug
 
-2. **Build the Debug APK**:
-   ```bash
-   ./gradlew assembleDebug
-   ```
+# Output APK:
+# app/build/outputs/apk/debug/app-debug.apk
 
-3. **Install on connected device via ADB**:
-   ```bash
-   adb install -r app/build/outputs/apk/debug/app-debug.apk
-   ```
+# Install via ADB:
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
-For detailed compilation steps and release signing instructions, consult [BUILD.md](BUILD.md).
-
----
-
-## 🔒 Permissions & Privacy
-
-Dynamic Island operates strictly on-device without any internet or analytics tracking:
-
-| Permission | Purpose |
-|:---|:---|
-| `SYSTEM_ALERT_WINDOW` | Allows floating the pill above applications and the status bar. |
-| `BIND_NOTIFICATION_LISTENER_SERVICE` | Intercepts media playback and notifications to render previews. |
-| `READ_PHONE_STATE` | Detects incoming and active calls to show caller info and call duration. |
-| `FOREGROUND_SERVICE` | Keeps the overlay alive and responsive in the background. |
-| `RECEIVE_BOOT_COMPLETED` | Automatically restarts the island when the device boots (optional). |
-| `VIBRATE` | Provides subtle haptic feedback when interacting with the pill. |
-
----
-
-## ⚡ Performance & Battery Optimization
-
-- **Zero Idle CPU Consumption**: When no audio is playing and no notification banner is active, the overlay enters a dormant idle state without active redraw loops.
-- **Dynamic Touch Window Sizing**: The `WindowManager.LayoutParams` bounding box automatically shrinks to the compact pill size when collapsed, allowing touches outside the island to pass through seamlessly to foreground apps.
-- **Downsampled Image Processing**: Large notification and album art drawables are safely scaled to thumbnail resolutions to maintain low memory overhead.
+Consult [BUILD.md](BUILD.md) for full setup instructions and release signing steps.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for complete details.
-# Andorind-dynamic-island
+Licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for complete details.

@@ -1,10 +1,11 @@
 package com.dynamicisland.android.ui.overlay
 
+import android.app.KeyguardManager
 import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,33 +19,41 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dynamicisland.android.R
 import com.dynamicisland.android.model.CallState
 import com.dynamicisland.android.model.IslandState
+import com.dynamicisland.android.service.CallTracker
+import com.dynamicisland.android.service.DynamicNotificationListenerService
 import com.dynamicisland.android.service.MediaSessionTracker
 
 @Composable
@@ -55,6 +64,7 @@ fun ExpandedIslandContent(
 ) {
     val context = LocalContext.current
     val mediaTracker = remember { MediaSessionTracker.getInstance(context) }
+    val callTracker = remember { CallTracker.getInstance(context) }
 
     Box(
         modifier = modifier
@@ -82,7 +92,22 @@ fun ExpandedIslandContent(
             is IslandState.ExpandedCall -> {
                 ExpandedCallView(
                     call = state.call,
-                    onDismiss = onDismissRequest
+                    onAnswer = {
+                        if (state.call.answerIntent != null) {
+                            try { state.call.answerIntent.send() } catch (e: Exception) { e.printStackTrace() }
+                        } else {
+                            callTracker.answerCall()
+                        }
+                        onDismissRequest()
+                    },
+                    onDecline = {
+                        if (state.call.declineIntent != null) {
+                            try { state.call.declineIntent.send() } catch (e: Exception) { e.printStackTrace() }
+                        } else {
+                            callTracker.endCall()
+                        }
+                        onDismissRequest()
+                    }
                 )
             }
 
@@ -93,7 +118,17 @@ fun ExpandedIslandContent(
             is IslandState.ExpandedTimer -> {
                 ExpandedTimerView(
                     timer = state.timer,
-                    onDismiss = onDismissRequest
+                    onTogglePauseResume = {
+                        if (state.timer.isRunning) {
+                            try { state.timer.pauseIntent?.send() } catch (e: Exception) { e.printStackTrace() }
+                        } else {
+                            try { state.timer.resumeIntent?.send() } catch (e: Exception) { e.printStackTrace() }
+                        }
+                    },
+                    onOpenClock = {
+                        try { state.timer.contentIntent?.send() } catch (e: Exception) { e.printStackTrace() }
+                        onDismissRequest()
+                    }
                 )
             }
 
@@ -274,6 +309,14 @@ private fun ExpandedNotificationView(
     notification: com.dynamicisland.android.model.NotificationItem,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val keyguardManager = remember { context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager }
+    val isLocked = keyguardManager?.isKeyguardLocked == true
+
+    var isReplying by remember { mutableStateOf(false) }
+    var replyText by remember { mutableStateOf("") }
+    val directReplyAction = notification.directReplyAction
+
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.SpaceBetween
@@ -282,7 +325,7 @@ private fun ExpandedNotificationView(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (notification.icon != null) {
+            if (notification.icon != null && !isLocked) {
                 Image(
                     bitmap = notification.icon.asImageBitmap(),
                     contentDescription = "App Icon",
@@ -316,7 +359,7 @@ private fun ExpandedNotificationView(
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = notification.title.ifBlank { notification.appName },
+                    text = if (isLocked) "New Notification" else notification.title.ifBlank { notification.appName },
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -327,7 +370,7 @@ private fun ExpandedNotificationView(
         }
 
         Text(
-            text = notification.text,
+            text = if (isLocked) "Unlock device to view message preview" else notification.text,
             color = Color(0xCCEBEBF5),
             fontSize = 13.sp,
             maxLines = 2,
@@ -335,19 +378,99 @@ private fun ExpandedNotificationView(
             modifier = Modifier.padding(vertical = 4.dp)
         )
 
+        // Direct Reply Input Field
+        AnimatedVisibility(visible = isReplying && directReplyAction != null && !isLocked) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF2C2C2E), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                BasicTextField(
+                    value = replyText,
+                    onValueChange = { replyText = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
+                    cursorBrush = SolidColor(Color(0xFF0A84FF)),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (replyText.isNotBlank()) {
+                            directReplyAction?.sendReply(context, replyText)
+                            isReplying = false
+                            replyText = ""
+                            onDismiss()
+                        }
+                    }),
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { innerTextField ->
+                        if (replyText.isEmpty()) {
+                            Text(text = "Reply...", color = Color(0x66FFFFFF), fontSize = 13.sp)
+                        }
+                        innerTextField()
+                    }
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = {
+                        if (replyText.isNotBlank()) {
+                            directReplyAction?.sendReply(context, replyText)
+                            isReplying = false
+                            replyText = ""
+                            onDismiss()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0A84FF)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(text = "Send", fontSize = 11.sp)
+                }
+            }
+        }
+
         // Notification Action Buttons
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            notification.actions.take(2).forEach { action ->
+            // Dismiss from Android system notification tray
+            Button(
+                onClick = {
+                    DynamicNotificationListenerService.cancelNotification(notification.key)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2C2C2E),
+                    contentColor = Color(0xFFFF453A)
+                ),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.padding(end = 6.dp)
+            ) {
+                Text(text = "Dismiss", fontSize = 11.sp)
+            }
+
+            // Direct Reply button if supported
+            if (directReplyAction != null && !isReplying && !isLocked) {
+                Button(
+                    onClick = { isReplying = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0A84FF),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.padding(end = 6.dp)
+                ) {
+                    Text(text = directReplyAction.title.ifBlank { "Reply" }, fontSize = 11.sp)
+                }
+            }
+
+            // Standard notification actions (Mark Read, Archive, etc.)
+            notification.actions.filter { !it.isDirectReply }.take(2).forEach { action ->
                 Button(
                     onClick = {
-                        try {
-                            action.intent?.send()
-                        } catch (e: Exception) {
-                            // Ignored
-                        }
+                        try { action.intent?.send() } catch (e: Exception) { e.printStackTrace() }
                         onDismiss()
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -355,29 +478,26 @@ private fun ExpandedNotificationView(
                         contentColor = Color.White
                     ),
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.padding(start = 6.dp)
+                    modifier = Modifier.padding(end = 6.dp)
                 ) {
-                    Text(text = action.title, fontSize = 12.sp)
+                    Text(text = action.title, fontSize = 11.sp)
                 }
             }
 
-            if (notification.contentIntent != null && notification.actions.isEmpty()) {
+            // Open original app button
+            if (notification.contentIntent != null) {
                 Button(
                     onClick = {
-                        try {
-                            notification.contentIntent.send()
-                        } catch (e: Exception) {
-                            // Ignored
-                        }
+                        try { notification.contentIntent.send() } catch (e: Exception) { e.printStackTrace() }
                         onDismiss()
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF0A84FF),
+                        containerColor = Color(0xFF2C2C2E),
                         contentColor = Color.White
                     ),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text(text = "Open", fontSize = 12.sp)
+                    Text(text = "Open", fontSize = 11.sp)
                 }
             }
         }
@@ -387,7 +507,8 @@ private fun ExpandedNotificationView(
 @Composable
 private fun ExpandedCallView(
     call: com.dynamicisland.android.model.CallInfo,
-    onDismiss: () -> Unit
+    onAnswer: () -> Unit,
+    onDecline: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -398,19 +519,29 @@ private fun ExpandedCallView(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF30D158)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_call),
-                    contentDescription = "Call",
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp)
+            if (call.avatar != null) {
+                Image(
+                    bitmap = call.avatar.asImageBitmap(),
+                    contentDescription = "Caller Avatar",
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF30D158)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_call),
+                        contentDescription = "Call",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(12.dp))
@@ -420,10 +551,13 @@ private fun ExpandedCallView(
                     text = call.callerName ?: "Unknown Caller",
                     color = Color.White,
                     fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = if (call.isInCall) "Call in progress • ${call.formattedDuration}" else "Incoming Call...",
+                    text = if (call.isInCall) "Active • ${call.formattedDuration} (${call.appName ?: "Phone"})"
+                    else "Incoming Call... (${call.appName ?: "Phone"})",
                     color = Color(0xFF30D158),
                     fontSize = 12.sp
                 )
@@ -435,38 +569,38 @@ private fun ExpandedCallView(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Decline / End Call Button
+            // Real Decline / End Call Action
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(50.dp)
                     .clip(CircleShape)
                     .background(Color(0xFFFF453A))
-                    .clickable { onDismiss() },
+                    .clickable { onDecline() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_call_end),
-                    contentDescription = "Decline",
+                    contentDescription = "Decline Call",
                     tint = Color.White,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(26.dp)
                 )
             }
 
             if (call.state == CallState.RINGING) {
-                // Answer Call Button
+                // Real Answer Call Action
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(50.dp)
                         .clip(CircleShape)
                         .background(Color(0xFF30D158))
-                        .clickable { onDismiss() },
+                        .clickable { onAnswer() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_call),
-                        contentDescription = "Answer",
+                        contentDescription = "Answer Call",
                         tint = Color.White,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
             }
@@ -519,14 +653,18 @@ private fun ExpandedBatteryView(
 @Composable
 private fun ExpandedTimerView(
     timer: com.dynamicisland.android.model.TimerInfo,
-    onDismiss: () -> Unit
+    onTogglePauseResume: () -> Unit,
+    onOpenClock: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxSize(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
             Box(
                 modifier = Modifier
                     .size(52.dp)
@@ -560,20 +698,39 @@ private fun ExpandedTimerView(
             }
         }
 
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Color(0xFFFF9F0A))
-                .clickable { onDismiss() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_pause),
-                contentDescription = "Pause",
-                tint = Color.Black,
-                modifier = Modifier.size(22.dp)
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Actual Pause / Resume Control if intent exists
+            if (timer.hasExecutableControls) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFFF9F0A))
+                        .clickable { onTogglePauseResume() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            id = if (timer.isRunning) R.drawable.ic_pause else R.drawable.ic_play
+                        ),
+                        contentDescription = if (timer.isRunning) "Pause" else "Resume",
+                        tint = Color.Black,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            Button(
+                onClick = onOpenClock,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2C2C2E),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(text = "Clock", fontSize = 11.sp)
+            }
         }
     }
 }
