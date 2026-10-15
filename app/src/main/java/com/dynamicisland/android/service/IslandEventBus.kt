@@ -21,6 +21,7 @@ import java.util.UUID
  * call, battery, and timer subsystems to the island presentation layer.
  *
  * Implements:
+ * - Clear separation of durable persistent StateFlows from one-time transient events (Finding 37)
  * - Multi-source call tracking (preventing notification removals from clearing cellular calls)
  * - Strict replay = 0 for transient events with explicit unique event IDs
  * - Reconciled notification map operations for silent startup synchronization
@@ -46,20 +47,27 @@ object IslandEventBus {
     val activeNotifications: StateFlow<Map<String, NotificationItem>> = _activeNotifications.asStateFlow()
 
     // Transient Events with replay = 0 to prevent replaying old alerts on new subscribers
+    // Strictly limited to one-time alert transitions and user interaction actions
     private val _transientEvents = MutableSharedFlow<IslandEvent>(
         replay = 0,
         extraBufferCapacity = 64
     )
     val transientEvents: SharedFlow<IslandEvent> = _transientEvents.asSharedFlow()
 
+    /**
+     * Updates persistent battery state.
+     * Does NOT duplicate into _transientEvents to avoid dual processing paths (Finding 37).
+     */
     fun updateBattery(battery: BatteryInfo) {
         _batteryState.value = battery
-        _transientEvents.tryEmit(IslandEvent.BatteryUpdate(battery))
     }
 
+    /**
+     * Updates persistent media playback state.
+     * Does NOT duplicate into _transientEvents (Finding 37).
+     */
     fun updateMedia(media: MediaInfo?) {
         _mediaState.value = media
-        _transientEvents.tryEmit(IslandEvent.MediaUpdate(media))
     }
 
     /**
@@ -121,7 +129,6 @@ object IslandEventBus {
     fun removeCallBySource(source: CallSource) {
         activeCalls.remove(source)
         resolveAuthoritativeCall()
-        _transientEvents.tryEmit(IslandEvent.CallRemoved(source))
     }
 
     @Synchronized
@@ -132,14 +139,14 @@ object IslandEventBus {
         val authoritative = ringing ?: offhook
 
         _callState.value = authoritative
-        if (authoritative != null) {
-            _transientEvents.tryEmit(IslandEvent.CallUpdate(authoritative))
-        }
     }
 
+    /**
+     * Updates persistent timer/stopwatch state.
+     * Does NOT duplicate into _transientEvents (Finding 37).
+     */
     fun updateTimer(timer: TimerInfo?) {
         _timerState.value = timer
-        _transientEvents.tryEmit(IslandEvent.TimerUpdate(timer))
     }
 
     /**
@@ -179,7 +186,7 @@ object IslandEventBus {
 
     /**
      * Posts a new incoming notification, updating persistent state and emitting
-     * a transient toast alert event.
+     * a genuine transient toast alert event.
      */
     fun postNotification(notification: NotificationItem, eventId: String = UUID.randomUUID().toString()) {
         val updated = _activeNotifications.value.toMutableMap()

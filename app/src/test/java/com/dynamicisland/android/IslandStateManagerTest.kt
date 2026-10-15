@@ -75,7 +75,7 @@ class IslandStateManagerTest {
         // 3. VoIP notification dismissed/removed
         IslandEventBus.removeCallBySource(CallSource.VOIP)
 
-        // 4. Assert that cellular call is STILL active and authoritative!
+        // 4. Assert that cellular call is STILL active and authoritative
         val remaining = IslandEventBus.callState.value
         assertNotNull(remaining)
         assertEquals(CallSource.CELLULAR, remaining?.source)
@@ -100,6 +100,24 @@ class IslandStateManagerTest {
         )
         IslandEventBus.updateBattery(battery)
         assertEquals(85, IslandEventBus.batteryState.value?.level)
+    }
+
+    @Test
+    fun testPersistentUpdatesDoNotDuplicateTransientEvents() {
+        // Finding 37: Verify updateBattery, updateMedia, updateTimer, updateCall do NOT emit into transientEvents
+        IslandEventBus.updateBattery(BatteryInfo(level = 95, isCharging = true))
+        IslandEventBus.updateMedia(MediaInfo(title = "Starboy", artist = "The Weeknd"))
+        IslandEventBus.updateTimer(TimerInfo(label = "Cooking", remainingSeconds = 300L))
+        IslandEventBus.updateCall(CallInfo(callerName = "Alex", state = CallState.OFFHOOK))
+
+        // Persistent flows are updated authoritatively
+        assertEquals(95, IslandEventBus.batteryState.value?.level)
+        assertEquals("Starboy", IslandEventBus.mediaState.value?.title)
+        assertEquals("Cooking", IslandEventBus.timerState.value?.label)
+        assertEquals("Alex", IslandEventBus.callState.value?.callerName)
+
+        // Transient flow replay cache remains completely empty
+        assertTrue(IslandEventBus.transientEvents.replayCache.isEmpty())
     }
 
     @Test
@@ -170,12 +188,6 @@ class IslandStateManagerTest {
         )
         assertTrue(notif.directReplyAction?.isDirectReply == true)
         assertEquals("reply_key", notif.directReplyAction?.remoteInputResultKey)
-    }
-
-    @Test
-    fun testNoReplayOfTransientEvents() {
-        // Verify that replay = 0 prevents caching old transient events
-        assertTrue(IslandEventBus.transientEvents.replayCache.isEmpty())
     }
 
     @Test

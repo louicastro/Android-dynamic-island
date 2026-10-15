@@ -73,11 +73,11 @@ enum class ExpandedTarget {
  * Pure state reducer and authoritative coordinator for the Dynamic Island.
  *
  * Implements:
- * - Unified single-reducer architecture eliminating flow race conditions
+ * - Single reducer loop for persistent states; transient queue strictly for one-time alerts (Finding 37)
+ * - Immediate eviction of charging and low battery toasts when battery alerts are disabled (Finding 38)
  * - Strict deterministic state prioritization (Incoming Call > In-Call > User Expansion > Timer > Toast > Media > Idle)
  * - Bounded notification and toast queue with deduplication and targeted timeouts
  * - Low battery alert threshold (<=20%) with hysteresis (>25% reset)
- * - Feature-gated toast eviction on setting toggles
  * - Independent user expansion state preservation
  */
 class IslandStateManager(
@@ -109,7 +109,8 @@ class IslandStateManager(
     }
 
     private fun observeSubsystems() {
-        // Collect persistent state flows with distinctUntilChanged to minimize redundant recompositions
+        // Collect persistent state flows. All persistent transitions (battery charging, call updates,
+        // media changes, timer ticks, settings updates) flow through this single authoritative path.
         scope.launch {
             combine(
                 settingsRepository.settingsFlow.distinctUntilChanged(),
@@ -124,7 +125,7 @@ class IslandStateManager(
             }
         }
 
-        // Collect transient events and dispatch to reducer
+        // Collect transient events (new notifications, gestures, ringers, timeouts)
         scope.launch {
             eventBus.transientEvents.collect { event ->
                 dispatch(event)
@@ -132,6 +133,12 @@ class IslandStateManager(
         }
     }
 
+    /**
+     * Primary reducer entry point for persistent subsystem state.
+     * Evaluates state transitions (e.g. charger connection, low battery crossing)
+     * and guarantees immediate purge of toasts if their corresponding feature is disabled.
+     */
+    @Synchronized
     private fun handlePersistentUpdate(
         settings: IslandSettings,
         call: CallInfo?,
@@ -139,8 +146,25 @@ class IslandStateManager(
         media: MediaInfo?,
         battery: BatteryInfo?
     ): IslandState {
-        // Enforce immediate transient eviction if a feature was disabled in settings
+        // 1. Immediately purge any active or queued toasts whose feature was disabled in settings (Finding 38)
         pruneToastsForDisabledSettings(settings)
+
+        // 2. Process battery transitions only when battery alerts are enabled
+        if (settings.enableBattery && battery != null) {
+            processBatteryTransitions(battery)
+        } else {
+            // Finding 38: When battery alerts are disabled, evict all charging/low-battery toasts immediately
+            val hadBatteryToast = toastQueue.removeAll { it is ActiveToastItem.Charging || it is ActiveToastItem.LowBattery }
+            if (expandedTarget == ExpandedTarget.BATTERY) {
+                expandedTarget = null
+            }
+            if (hadBatteryToast) {
+                checkScheduleTimeout()
+            }
+            if (battery != null) {
+                lastChargingState = battery.isCharging
+            }
+        }
 
         return computeState(
             settings = settings,
@@ -151,6 +175,45 @@ class IslandStateManager(
             activeToast = toastQueue.firstOrNull(),
             target = expandedTarget
         )
+    }
+
+    private fun processBatteryTransitions(battery: BatteryInfo) {
+        if (battery.isCharging) {
+            // Charger plugged in transition: enqueue charging toast
+            if (!lastChargingState) {
+                enqueueToast(
+                    ActiveToastItem.Charging(
+                        id = UUID.randomUUID().toString(),
+                        timestamp = System.currentTimeMillis(),
+                        battery = battery
+                    )
+                )
+            }
+            hasFiredLowBatteryAlert = false
+        } else {
+            // Charger unplugged transition: remove charging toast if it was active
+            if (lastChargingState) {
+                val removedHead = toastQueue.firstOrNull() is ActiveToastItem.Charging
+                toastQueue.removeAll { it is ActiveToastItem.Charging }
+                if (removedHead) checkScheduleTimeout()
+            }
+
+            // Discharging: check low battery threshold (<= 20%) with single-fire latch
+            if (battery.level in 0..lowBatteryThreshold && !hasFiredLowBatteryAlert) {
+                hasFiredLowBatteryAlert = true
+                enqueueToast(
+                    ActiveToastItem.LowBattery(
+                        id = UUID.randomUUID().toString(),
+                        timestamp = System.currentTimeMillis(),
+                        battery = battery
+                    )
+                )
+            } else if (battery.level > lowBatteryResetThreshold) {
+                // Hysteresis: re-arm latch only after battery level recovers above reset threshold (> 25%)
+                hasFiredLowBatteryAlert = false
+            }
+        }
+        lastChargingState = battery.isCharging
     }
 
     @Synchronized
@@ -169,9 +232,20 @@ class IslandStateManager(
             }
 
             is IslandEvent.BatteryUpdate -> {
-                if (settings.enableBattery) {
-                    handleBatteryUpdate(event.battery, event.eventId)
-                }
+                // Settings screen or external callers emitting BatteryUpdate
+                eventBus.updateBattery(event.battery)
+            }
+
+            is IslandEvent.MediaUpdate -> {
+                eventBus.updateMedia(event.media)
+            }
+
+            is IslandEvent.CallUpdate -> {
+                eventBus.updateCall(event.call)
+            }
+
+            is IslandEvent.TimerUpdate -> {
+                eventBus.updateTimer(event.timer)
             }
 
             is IslandEvent.RingerModeToggle -> {
@@ -227,38 +301,6 @@ class IslandStateManager(
         recompute()
     }
 
-    private fun handleBatteryUpdate(battery: BatteryInfo, eventId: String) {
-        if (battery.isCharging) {
-            // Plugged in: show charging toast on plug transition and reset low battery latch
-            if (!lastChargingState) {
-                enqueueToast(
-                    ActiveToastItem.Charging(
-                        id = eventId,
-                        timestamp = System.currentTimeMillis(),
-                        battery = battery
-                    )
-                )
-            }
-            hasFiredLowBatteryAlert = false
-        } else {
-            // Discharging: check threshold (<= 20%) with single-fire latch
-            if (battery.level in 0..lowBatteryThreshold && !hasFiredLowBatteryAlert) {
-                hasFiredLowBatteryAlert = true
-                enqueueToast(
-                    ActiveToastItem.LowBattery(
-                        id = eventId,
-                        timestamp = System.currentTimeMillis(),
-                        battery = battery
-                    )
-                )
-            } else if (battery.level > lowBatteryResetThreshold) {
-                // Hysteresis: re-arm latch only after battery rises above reset threshold
-                hasFiredLowBatteryAlert = false
-            }
-        }
-        lastChargingState = battery.isCharging
-    }
-
     private fun enqueueNotificationToast(notification: NotificationItem, eventId: String) {
         // Deduplicate: replace existing toast with same key or append
         toastQueue.removeAll { it is ActiveToastItem.Notification && it.item.key == notification.key }
@@ -284,7 +326,12 @@ class IslandStateManager(
     }
 
     private fun checkScheduleTimeout() {
-        val currentHead = toastQueue.firstOrNull() ?: return
+        val currentHead = toastQueue.firstOrNull()
+        if (currentHead == null) {
+            timeoutJob?.cancel()
+            timeoutJob = null
+            return
+        }
         timeoutJob?.cancel()
         timeoutJob = scope.launch {
             delay(TOAST_DURATION_MS)
@@ -318,12 +365,18 @@ class IslandStateManager(
 
     private fun pruneToastsForDisabledSettings(settings: IslandSettings) {
         if (!settings.enableNotifications) {
+            val removedHead = toastQueue.firstOrNull() is ActiveToastItem.Notification
             toastQueue.removeAll { it is ActiveToastItem.Notification }
             if (expandedTarget == ExpandedTarget.NOTIFICATION) expandedTarget = null
+            if (removedHead) checkScheduleTimeout()
         }
         if (!settings.enableBattery) {
+            val removedHead = toastQueue.firstOrNull() is ActiveToastItem.Charging ||
+                    toastQueue.firstOrNull() is ActiveToastItem.LowBattery
             toastQueue.removeAll { it is ActiveToastItem.Charging || it is ActiveToastItem.LowBattery }
             if (expandedTarget == ExpandedTarget.BATTERY) expandedTarget = null
+            if (removedHead) checkScheduleTimeout()
+            hasFiredLowBatteryAlert = false
         }
         if (!settings.enableMusic && expandedTarget == ExpandedTarget.MEDIA) {
             expandedTarget = null
@@ -422,15 +475,17 @@ class IslandStateManager(
                 ExpandedTarget.CALL -> if (activeCall != null) return IslandState.ExpandedCall(activeCall)
                 ExpandedTarget.TIMER -> if (timer != null) return IslandState.ExpandedTimer(timer)
                 ExpandedTarget.NOTIFICATION -> {
-                    if (activeToast is ActiveToastItem.Notification) {
+                    if (settings.enableNotifications && activeToast is ActiveToastItem.Notification) {
                         return IslandState.ExpandedNotification(activeToast.item)
                     }
                 }
                 ExpandedTarget.MEDIA -> if (activeMedia != null) return IslandState.ExpandedMusic(activeMedia)
                 ExpandedTarget.BATTERY -> {
-                    if (activeToast is ActiveToastItem.LowBattery) return IslandState.ExpandedLowBattery(activeToast.battery)
-                    if (activeToast is ActiveToastItem.Charging) return IslandState.ExpandedBattery(activeToast.battery)
-                    if (activeBattery != null) return IslandState.ExpandedBattery(activeBattery)
+                    if (settings.enableBattery) {
+                        if (activeToast is ActiveToastItem.LowBattery) return IslandState.ExpandedLowBattery(activeToast.battery)
+                        if (activeToast is ActiveToastItem.Charging) return IslandState.ExpandedBattery(activeToast.battery)
+                        if (activeBattery != null) return IslandState.ExpandedBattery(activeBattery)
+                    }
                 }
                 ExpandedTarget.RINGER -> {
                     if (activeToast is ActiveToastItem.Ringer) return IslandState.ExpandedRinger(activeToast.isMuted)
@@ -474,7 +529,7 @@ class IslandStateManager(
         }
 
         // Priority 6: Multi-tasking Split State (Media + Battery Charging)
-        if (activeMedia != null && activeBattery != null && activeBattery.isCharging) {
+        if (activeMedia != null && activeBattery != null && activeBattery.isCharging && settings.enableBattery) {
             return IslandState.SplitIsland(
                 primaryState = IslandState.CompactMusic(activeMedia),
                 secondaryState = IslandState.CompactBattery(activeBattery)
