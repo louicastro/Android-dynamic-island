@@ -117,7 +117,7 @@ flowchart TD
 
 ## ⚡ Performance, Memory, and Battery Targets
 
-- **Negligible Idle Overhead**: When no audio is playing and no alert is active, the overlay enters an idle state with zero recomposition passes.
+- **Negligible Idle Overhead**: When no audio is playing and no alert is active, the overlay enters a dormant idle state without active composition loops or unnecessary background redraws.
 - **Dynamic Touch Window Sizing**: The `WindowManager.LayoutParams` bounding box automatically shrinks to the compact pill size when collapsed, allowing touches outside the island to pass through seamlessly to foreground apps.
 - **Clamped Image Allocation**: All notification icons and album arts are scaled down (max 128x128 for icons, 256x256 for album art) to prevent OutOfMemory exceptions on budget and mid-range devices (e.g., Samsung Galaxy A-series).
 - **Subsystem Resource Release**: Disabling the island in settings halts background trackers and transitions the Compose lifecycle to `ON_PAUSE`.
