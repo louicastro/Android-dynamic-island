@@ -53,7 +53,7 @@ data class CallInfo(
     val currentDurationSeconds: Long
         get() {
             if (callStartElapsedRealtime > 0L && state == CallState.OFFHOOK) {
-                val elapsedMs = SystemClock.elapsedRealtime() - callStartElapsedRealtime
+                val elapsedMs = System.currentTimeMillis() - callStartElapsedRealtime
                 return (elapsedMs / 1000L).coerceAtLeast(0L)
             }
             return callDurationSeconds

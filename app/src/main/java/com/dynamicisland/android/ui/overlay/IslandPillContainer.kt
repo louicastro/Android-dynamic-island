@@ -162,7 +162,7 @@ fun IslandPillContainer(
         }
 
         // Secondary detached bubble in Split state
-        if (isSplit && state is IslandState.SplitIsland) {
+        if (state is IslandState.SplitIsland) {
             Spacer(modifier = Modifier.width(10.dp))
             SplitBubbleContent(
                 state = state.secondaryState,

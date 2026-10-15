@@ -68,7 +68,14 @@ class IslandStateManagerTest {
             callDurationSeconds = 42L
         )
         IslandEventBus.updateCall(activeCall)
+
+        // Incoming ringing call takes priority over active offhook call
+        assertEquals(ringingCall, IslandEventBus.callState.value)
+
+        // Once ringing call finishes, the active call becomes authoritative
+        IslandEventBus.removeCallBySource(CallSource.VOIP)
         assertEquals("00:42", IslandEventBus.callState.value?.formattedDuration)
+        assertEquals("Bob", IslandEventBus.callState.value?.callerName)
     }
 
     @Test
@@ -140,8 +147,8 @@ class IslandStateManagerTest {
     @Test
     fun testExplicitResetAllCalls() {
         // Finding 40: Calling resetAllCalls() clears all sources explicitly
-        IslandEventBus.updateCall(CallInfo(callerName = "A", source = CallSource.CELLULAR))
-        IslandEventBus.updateCall(CallInfo(callerName = "B", source = CallSource.VOIP))
+        IslandEventBus.updateCall(CallInfo(callerName = "A", source = CallSource.CELLULAR, state = CallState.OFFHOOK))
+        IslandEventBus.updateCall(CallInfo(callerName = "B", source = CallSource.VOIP, state = CallState.RINGING))
         assertNotNull(IslandEventBus.callState.value)
 
         IslandEventBus.resetAllCalls()
@@ -333,8 +340,8 @@ class IslandStateManagerTest {
 
         // Genuine transition triggers charging toast alert
         val state = stateManager.currentState.value
-        assertTrue("Expected IslandState.Charging toast but got $state", state is IslandState.Charging)
-        assertEquals(80, (state as IslandState.Charging).battery.level)
+        assertTrue("Expected IslandState.ChargingToast but got $state", state is IslandState.ChargingToast)
+        assertEquals(80, (state as IslandState.ChargingToast).battery.level)
 
         // 3. User unplugs phone: transition from plugged to unplugged
         IslandEventBus.updateBattery(BatteryInfo(level = 81, isCharging = false, isPlugged = false))
@@ -355,7 +362,7 @@ class IslandStateManagerTest {
 
         // Plug in charger -> triggers charging toast
         IslandEventBus.updateBattery(BatteryInfo(level = 50, isCharging = true, isPlugged = true))
-        assertTrue(stateManager.currentState.value is IslandState.Charging)
+        assertTrue(stateManager.currentState.value is IslandState.ChargingToast)
 
         // Finding 38: User disables battery alerts in settings
         fakeSettings.updateSettings { it.copy(enableBattery = false) }

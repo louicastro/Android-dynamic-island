@@ -51,6 +51,7 @@ class CallTracker(private val context: Context) {
     private var durationJob: Job? = null
     private var callStartMonotonicMs: Long = 0L
 
+    @Suppress("DEPRECATION")
     private var legacyListener: PhoneStateListener? = null
     private var telephonyCallback: Any? = null
 
@@ -107,7 +108,7 @@ class CallTracker(private val context: Context) {
 
         if (callState == CallState.OFFHOOK) {
             if (callStartMonotonicMs == 0L) {
-                callStartMonotonicMs = SystemClock.elapsedRealtime()
+                callStartMonotonicMs = System.currentTimeMillis()
             }
             startDurationCounter(phoneNumber)
         } else {
@@ -208,6 +209,7 @@ class CallTracker(private val context: Context) {
      * Answers an incoming ringing cellular call via TelecomManager.
      * Returns an explicit [CallActionResult] with failure details if permissions are missing.
      */
+    @Suppress("DEPRECATION")
     fun answerCall(): CallActionResult {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return CallActionResult(false, "Answering calls is unsupported on Android versions below 8.0")
@@ -240,6 +242,7 @@ class CallTracker(private val context: Context) {
     /**
      * Ends or declines an active or ringing cellular call via TelecomManager.
      */
+    @Suppress("DEPRECATION")
     fun endCall(): CallActionResult {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             return CallActionResult(false, "Ending calls via Telecom requires Android 9.0 (API 28)+")

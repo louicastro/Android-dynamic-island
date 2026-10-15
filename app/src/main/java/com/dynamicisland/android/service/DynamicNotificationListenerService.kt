@@ -366,6 +366,7 @@ class DynamicNotificationListenerService : NotificationListenerService() {
         return -1L
     }
 
+    @Suppress("DEPRECATION")
     private fun shouldFilterNotification(notification: Notification, packageName: String): Boolean {
         // Skip group summaries that do not have actual alert content
         val isGroupSummary = (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0

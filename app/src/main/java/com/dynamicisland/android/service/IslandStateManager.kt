@@ -20,7 +20,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -115,11 +114,11 @@ class IslandStateManager(
         // media changes, timer ticks, settings updates) flow through this single authoritative path.
         scope.launch {
             combine(
-                settingsRepository.settingsFlow.distinctUntilChanged(),
-                eventBus.callState.distinctUntilChanged(),
-                eventBus.timerState.distinctUntilChanged(),
-                eventBus.mediaState.distinctUntilChanged(),
-                eventBus.batteryState.distinctUntilChanged()
+                settingsRepository.settingsFlow,
+                eventBus.callState,
+                eventBus.timerState,
+                eventBus.mediaState,
+                eventBus.batteryState
             ) { settings, call, timer, media, battery ->
                 handlePersistentUpdate(settings, call, timer, media, battery)
             }.collect { newState ->

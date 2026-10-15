@@ -16,15 +16,15 @@ data class MediaInfo(
     val currentPositionMs: Long = 0L,
     val packageName: String = "",
     val playbackSpeed: Float = 1.0f,
-    val lastPositionUpdateTimestamp: Long = SystemClock.elapsedRealtime()
+    val lastPositionUpdateTimestamp: Long = System.currentTimeMillis()
 ) {
     /**
-     * Estimates current playback position based on monotonic elapsed time since the
+     * Estimates current playback position based on elapsed time since the
      * last controller update. Prevents the progress bar from freezing between callbacks.
      */
     fun estimatedPositionMs(): Long {
         if (!isPlaying || durationMs <= 0L) return currentPositionMs
-        val elapsed = (SystemClock.elapsedRealtime() - lastPositionUpdateTimestamp).coerceAtLeast(0L)
+        val elapsed = (System.currentTimeMillis() - lastPositionUpdateTimestamp).coerceAtLeast(0L)
         val estimated = currentPositionMs + (elapsed * playbackSpeed).toLong()
         return estimated.coerceIn(0L, durationMs)
     }

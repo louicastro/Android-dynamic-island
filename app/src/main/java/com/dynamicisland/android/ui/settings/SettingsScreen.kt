@@ -50,6 +50,7 @@ import com.dynamicisland.android.R
 import com.dynamicisland.android.data.SettingsRepository
 import com.dynamicisland.android.model.BatteryInfo
 import com.dynamicisland.android.model.CallInfo
+import com.dynamicisland.android.model.CallSource
 import com.dynamicisland.android.model.CallState
 import com.dynamicisland.android.model.CutoutType
 import com.dynamicisland.android.model.IslandEvent
@@ -146,8 +147,13 @@ fun SettingsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(innerPadding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 8.dp,
+                bottom = 32.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Live Preview Header Card
@@ -510,16 +516,32 @@ private fun CutoutPositionCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                CutoutChip("Center", settings.cutoutType == CutoutType.CENTER_PUNCH_HOLE) {
+                CutoutChip(
+                    label = "Center",
+                    isSelected = settings.cutoutType == CutoutType.CENTER_PUNCH_HOLE,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onCutoutTypeChange(CutoutType.CENTER_PUNCH_HOLE)
                 }
-                CutoutChip("Left", settings.cutoutType == CutoutType.LEFT_PUNCH_HOLE) {
+                CutoutChip(
+                    label = "Left",
+                    isSelected = settings.cutoutType == CutoutType.LEFT_PUNCH_HOLE,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onCutoutTypeChange(CutoutType.LEFT_PUNCH_HOLE)
                 }
-                CutoutChip("Right", settings.cutoutType == CutoutType.RIGHT_PUNCH_HOLE) {
+                CutoutChip(
+                    label = "Right",
+                    isSelected = settings.cutoutType == CutoutType.RIGHT_PUNCH_HOLE,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onCutoutTypeChange(CutoutType.RIGHT_PUNCH_HOLE)
                 }
-                CutoutChip("Notch", settings.cutoutType == CutoutType.WATERDROP_NOTCH) {
+                CutoutChip(
+                    label = "Notch",
+                    isSelected = settings.cutoutType == CutoutType.WATERDROP_NOTCH,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onCutoutTypeChange(CutoutType.WATERDROP_NOTCH)
                 }
             }
@@ -528,11 +550,12 @@ private fun CutoutPositionCard(
 
             Button(
                 onClick = onOpenCalibrator,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(44.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppleGlassBorder)
             ) {
-                Text(text = "Interactive Screen Calibrator", color = AppleTextPrimary, fontSize = 13.sp)
+                Text(text = "Interactive Screen Calibrator", color = AppleTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -542,22 +565,32 @@ private fun CutoutPositionCard(
 private fun CutoutChip(
     label: String,
     isSelected: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Box(
-        modifier = Modifier
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
             .background(
-                color = if (isSelected) AppleBlue else AppleDarkCardSecondary,
-                shape = RoundedCornerShape(10.dp)
+                color = if (isSelected) AppleBlue.copy(alpha = 0.25f) else AppleDarkCardSecondary
+            )
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) AppleBlue else AppleGlassBorder,
+                shape = RoundedCornerShape(12.dp)
             )
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .padding(horizontal = 6.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = AppleTextPrimary,
+            color = if (isSelected) AppleTextPrimary else AppleTextSecondary,
             fontSize = 12.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
         )
     }
 }
@@ -671,13 +704,25 @@ private fun AppearanceCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                CutoutChip("AMOLED Black", settings.themeMode == IslandThemeMode.AMOLED_BLACK) {
+                CutoutChip(
+                    label = "AMOLED Black",
+                    isSelected = settings.themeMode == IslandThemeMode.AMOLED_BLACK,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onThemeChange(IslandThemeMode.AMOLED_BLACK)
                 }
-                CutoutChip("Frosted Glass", settings.themeMode == IslandThemeMode.FROSTED_GLASS) {
+                CutoutChip(
+                    label = "Frosted Glass",
+                    isSelected = settings.themeMode == IslandThemeMode.FROSTED_GLASS,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onThemeChange(IslandThemeMode.FROSTED_GLASS)
                 }
-                CutoutChip("Accent Glow", settings.themeMode == IslandThemeMode.AMBIENT_ACCENT) {
+                CutoutChip(
+                    label = "Accent Glow",
+                    isSelected = settings.themeMode == IslandThemeMode.AMBIENT_ACCENT,
+                    modifier = Modifier.weight(1f)
+                ) {
                     onThemeChange(IslandThemeMode.AMBIENT_ACCENT)
                 }
             }
@@ -711,125 +756,156 @@ private fun SimulatorCard() {
             )
             Spacer(modifier = Modifier.height(14.dp))
 
+            // Row 1: Music & Notification
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Button(
-                    onClick = {
-                        val fakeMedia = MediaInfo(
-                            title = "Starboy",
-                            artist = "The Weeknd",
-                            isPlaying = true,
-                            durationMs = 230000L,
-                            currentPositionMs = 45000L
-                        )
-                        IslandEventBus.emit(IslandEvent.MediaUpdate(fakeMedia))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
+                SimulatorButton(
+                    label = "Music Track",
+                    iconRes = R.drawable.ic_music,
+                    iconTint = ApplePink,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Music", fontSize = 12.sp)
+                    val fakeMedia = MediaInfo(
+                        title = "Starboy",
+                        artist = "The Weeknd",
+                        isPlaying = true,
+                        durationMs = 230000L,
+                        currentPositionMs = 45000L
+                    )
+                    IslandEventBus.updateMedia(fakeMedia)
                 }
 
-                Button(
-                    onClick = {
-                        val fakeNotif = NotificationItem(
-                            key = "demo_key_${System.currentTimeMillis()}",
-                            packageName = "com.whatsapp",
-                            appName = "WhatsApp",
-                            title = "Sarah Miller",
-                            text = "Hey! Are you ready for our meeting?"
-                        )
-                        IslandEventBus.emit(IslandEvent.NotificationPosted(fakeNotif))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
+                SimulatorButton(
+                    label = "Notification",
+                    iconRes = R.drawable.ic_bell,
+                    iconTint = AppleOrange,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Notify", fontSize = 12.sp)
-                }
-
-                Button(
-                    onClick = {
-                        val fakeBattery = BatteryInfo(
-                            level = 88,
-                            isCharging = true,
-                            isPlugged = true,
-                            chargingSpeedType = "Super Fast Charging"
-                        )
-                        IslandEventBus.emit(IslandEvent.BatteryUpdate(fakeBattery))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text("Battery", fontSize = 12.sp)
-                }
-
-                Button(
-                    onClick = {
-                        val fakeCall = CallInfo(
-                            callerName = "Alex Rivera",
-                            callerNumber = "+1 (555) 019-2834",
-                            state = CallState.RINGING
-                        )
-                        IslandEventBus.emit(IslandEvent.CallUpdate(fakeCall))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text("Call", fontSize = 12.sp)
+                    val fakeNotif = NotificationItem(
+                        key = "demo_key_${System.currentTimeMillis()}",
+                        packageName = "com.whatsapp",
+                        appName = "WhatsApp",
+                        title = "Sarah Miller",
+                        text = "Hey! Are you ready for our meeting?"
+                    )
+                    IslandEventBus.emit(IslandEvent.NotificationPosted(fakeNotif))
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
+            // Row 2: Battery & Call
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Button(
-                    onClick = {
-                        val fakeTimer = TimerInfo(
-                            label = "Timer",
-                            totalSeconds = 300L,
-                            remainingSeconds = 245L,
-                            isRunning = true
-                        )
-                        IslandEventBus.emit(IslandEvent.TimerUpdate(fakeTimer))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
+                SimulatorButton(
+                    label = "Battery (88%)",
+                    iconRes = R.drawable.ic_battery_charging,
+                    iconTint = AppleGreen,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Timer", fontSize = 12.sp)
+                    val fakeBattery = BatteryInfo(
+                        level = 88,
+                        isCharging = true,
+                        isPlugged = true,
+                        chargingSpeedType = "Fast Charging (AC)"
+                    )
+                    IslandEventBus.updateBattery(fakeBattery)
                 }
 
-                Button(
-                    onClick = {
-                        IslandEventBus.emit(IslandEvent.RingerModeToggle(isMuted = true))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
+                SimulatorButton(
+                    label = "Phone Call",
+                    iconRes = R.drawable.ic_call,
+                    iconTint = AppleGreen,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Silent", fontSize = 12.sp)
-                }
-
-                Button(
-                    onClick = {
-                        IslandEventBus.emit(IslandEvent.BluetoothConnect("AirPods Pro"))
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppleDarkCardSecondary),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text("AirPods", fontSize = 12.sp)
+                    val fakeCall = CallInfo(
+                        callerName = "Alex Rivera",
+                        callerNumber = "+1 (555) 019-2834",
+                        state = CallState.RINGING,
+                        source = CallSource.CELLULAR,
+                        appName = "Phone"
+                    )
+                    IslandEventBus.updateCall(fakeCall)
                 }
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Row 3: Timer & Ringer
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                SimulatorButton(
+                    label = "Timer",
+                    iconRes = R.drawable.ic_bell,
+                    iconTint = AppleBlue,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    val fakeTimer = TimerInfo(
+                        label = "Timer",
+                        totalSeconds = 300L,
+                        remainingSeconds = 245L,
+                        isRunning = true
+                    )
+                    IslandEventBus.updateTimer(fakeTimer)
+                }
+
+                SimulatorButton(
+                    label = "Silent Mode",
+                    iconRes = R.drawable.ic_bell,
+                    iconTint = AppleRed,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    IslandEventBus.emit(IslandEvent.RingerModeToggle(isMuted = true))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimulatorButton(
+    label: String,
+    iconRes: Int,
+    iconTint: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(44.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = AppleDarkCardSecondary,
+            contentColor = AppleTextPrimary
+        ),
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppleGlassBorder)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                painter = painterResource(id = iconRes),
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
         }
     }
 }
