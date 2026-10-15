@@ -75,7 +75,8 @@ enum class ExpandedTarget {
  * Implements:
  * - Single reducer loop for persistent states; transient queue strictly for one-time alerts (Finding 37)
  * - Immediate eviction of charging and low battery toasts when battery alerts are disabled (Finding 38)
- * - Strict deterministic state prioritization (Incoming Call > In-Call > User Expansion > Timer > Toast > Media > Idle)
+ * - Startup guard ensuring initial battery broadcast does not fire an unwanted charging toast (Section 17.2)
+ * - Source-isolated call merging and deterministic priority (Finding 39, Finding 40)
  * - Bounded notification and toast queue with deduplication and targeted timeouts
  * - Low battery alert threshold (<=20%) with hysteresis (>25% reset)
  * - Independent user expansion state preservation
@@ -96,8 +97,9 @@ class IslandStateManager(
     // User-requested expansion target
     private var expandedTarget: ExpandedTarget? = null
 
-    // Battery alert latching with hysteresis
-    private var lastChargingState: Boolean = false
+    // Battery alert latching with hysteresis and startup guard
+    // null indicates initial unseeded state on startup
+    private var lastChargingState: Boolean? = null
     private var hasFiredLowBatteryAlert: Boolean = false
     private val lowBatteryThreshold: Int = 20
     private val lowBatteryResetThreshold: Int = 25
@@ -178,9 +180,19 @@ class IslandStateManager(
     }
 
     private fun processBatteryTransitions(battery: BatteryInfo) {
+        val previousCharging = lastChargingState
+        if (previousCharging == null) {
+            // Startup guard: on initial battery broadcast, seed state without firing an alert toast!
+            lastChargingState = battery.isCharging
+            if (battery.level in 0..lowBatteryThreshold && !battery.isCharging) {
+                hasFiredLowBatteryAlert = true
+            }
+            return
+        }
+
         if (battery.isCharging) {
-            // Charger plugged in transition: enqueue charging toast
-            if (!lastChargingState) {
+            // Charger plugged in transition: enqueue charging toast only if state transitioned from unplugged
+            if (!previousCharging) {
                 enqueueToast(
                     ActiveToastItem.Charging(
                         id = UUID.randomUUID().toString(),
@@ -192,7 +204,7 @@ class IslandStateManager(
             hasFiredLowBatteryAlert = false
         } else {
             // Charger unplugged transition: remove charging toast if it was active
-            if (lastChargingState) {
+            if (previousCharging) {
                 val removedHead = toastQueue.firstOrNull() is ActiveToastItem.Charging
                 toastQueue.removeAll { it is ActiveToastItem.Charging }
                 if (removedHead) checkScheduleTimeout()
@@ -232,7 +244,6 @@ class IslandStateManager(
             }
 
             is IslandEvent.BatteryUpdate -> {
-                // Settings screen or external callers emitting BatteryUpdate
                 eventBus.updateBattery(event.battery)
             }
 
@@ -377,6 +388,7 @@ class IslandStateManager(
             if (expandedTarget == ExpandedTarget.BATTERY) expandedTarget = null
             if (removedHead) checkScheduleTimeout()
             hasFiredLowBatteryAlert = false
+            lastChargingState = null
         }
         if (!settings.enableMusic && expandedTarget == ExpandedTarget.MEDIA) {
             expandedTarget = null

@@ -21,8 +21,9 @@ import java.util.UUID
  * call, battery, and timer subsystems to the island presentation layer.
  *
  * Implements:
- * - Clear separation of durable persistent StateFlows from one-time transient events (Finding 37)
- * - Multi-source call tracking (preventing notification removals from clearing cellular calls)
+ * - Isolation of caller identity to matching call sources only (Finding 39)
+ * - Source-specific call termination preventing unintended global clears (Finding 40)
+ * - Complete separation of durable StateFlows from one-time transient events (Finding 37)
  * - Strict replay = 0 for transient events with explicit unique event IDs
  * - Reconciled notification map operations for silent startup synchronization
  */
@@ -47,7 +48,6 @@ object IslandEventBus {
     val activeNotifications: StateFlow<Map<String, NotificationItem>> = _activeNotifications.asStateFlow()
 
     // Transient Events with replay = 0 to prevent replaying old alerts on new subscribers
-    // Strictly limited to one-time alert transitions and user interaction actions
     private val _transientEvents = MutableSharedFlow<IslandEvent>(
         replay = 0,
         extraBufferCapacity = 64
@@ -56,7 +56,7 @@ object IslandEventBus {
 
     /**
      * Updates persistent battery state.
-     * Does NOT duplicate into _transientEvents to avoid dual processing paths (Finding 37).
+     * Does NOT duplicate into _transientEvents (Finding 37).
      */
     fun updateBattery(battery: BatteryInfo) {
         _batteryState.value = battery
@@ -72,18 +72,12 @@ object IslandEventBus {
 
     /**
      * Updates call state for a specific call source (CELLULAR or VOIP).
-     * Intelligently merges incoming call details with existing records to preserve
-     * caller identity (names, phone numbers, avatars) and monotonic duration timestamps.
+     * Merges ONLY with previous call record from the exact same source to prevent
+     * cross-source identity contamination (Finding 39).
      */
     @Synchronized
-    fun updateCall(call: CallInfo?) {
-        if (call == null) {
-            activeCalls.clear()
-            _callState.value = null
-            return
-        }
-
-        val previous = activeCalls[call.source] ?: _callState.value
+    fun updateCall(call: CallInfo) {
+        val previous = activeCalls[call.source]
         val merged = if (previous != null) {
             val isIncomingNameGeneric = call.callerName.isNullOrBlank() ||
                     call.callerName == "Cellular Call" ||
@@ -122,13 +116,23 @@ object IslandEventBus {
     }
 
     /**
-     * Removes call state for a specific source.
-     * Prevents a notification dismissal for a VoIP app from clearing an active cellular call.
+     * Source-specific call termination (Finding 40).
+     * Removes only the specified source, ensuring other active call sources remain intact.
      */
     @Synchronized
     fun removeCallBySource(source: CallSource) {
         activeCalls.remove(source)
         resolveAuthoritativeCall()
+    }
+
+    /**
+     * Explicit global clear of all calls across all sources.
+     * Reserved exclusively for full subsystem reset or test teardown (Finding 40).
+     */
+    @Synchronized
+    fun resetAllCalls() {
+        activeCalls.clear()
+        _callState.value = null
     }
 
     @Synchronized

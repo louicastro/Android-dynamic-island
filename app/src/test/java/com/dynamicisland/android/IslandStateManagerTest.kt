@@ -13,6 +13,7 @@ import com.dynamicisland.android.service.IslandEventBus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -21,8 +22,8 @@ class IslandStateManagerTest {
 
     @Before
     fun setUp() {
-        // Reset EventBus states before each test
-        IslandEventBus.updateCall(null)
+        // Reset EventBus states before each test using explicit resetAllCalls
+        IslandEventBus.resetAllCalls()
         IslandEventBus.updateMedia(null)
         IslandEventBus.updateTimer(null)
     }
@@ -46,6 +47,37 @@ class IslandStateManagerTest {
         )
         IslandEventBus.updateCall(activeCall)
         assertEquals("00:42", IslandEventBus.callState.value?.formattedDuration)
+    }
+
+    @Test
+    fun testCrossSourceCallIdentityIsolation() {
+        // Finding 39: Ensure a new call from a different source NEVER inherits identity from current call
+        val cellularCall = CallInfo(
+            callerName = "Alice",
+            callerNumber = "+1 (555) 012-3456",
+            state = CallState.OFFHOOK,
+            source = CallSource.CELLULAR,
+            appName = "Phone"
+        )
+        IslandEventBus.updateCall(cellularCall)
+        assertEquals("Alice", IslandEventBus.callState.value?.callerName)
+
+        // An incoming VoIP call arrives without a caller name
+        val voipCall = CallInfo(
+            callerName = null,
+            callerNumber = null,
+            state = CallState.RINGING,
+            source = CallSource.VOIP,
+            appName = "WhatsApp"
+        )
+        IslandEventBus.updateCall(voipCall)
+
+        // The VoIP call is authoritative (RINGING > OFFHOOK), but must NEVER inherit "Alice" from Cellular!
+        val authoritative = IslandEventBus.callState.value
+        assertNotNull(authoritative)
+        assertEquals(CallSource.VOIP, authoritative?.source)
+        assertNull(authoritative?.callerName)
+        assertNull(authoritative?.callerNumber)
     }
 
     @Test
@@ -81,6 +113,17 @@ class IslandStateManagerTest {
         assertEquals(CallSource.CELLULAR, remaining?.source)
         assertEquals("David", remaining?.callerName)
         assertEquals(CallState.OFFHOOK, remaining?.state)
+    }
+
+    @Test
+    fun testExplicitResetAllCalls() {
+        // Finding 40: Calling resetAllCalls() clears all sources explicitly
+        IslandEventBus.updateCall(CallInfo(callerName = "A", source = CallSource.CELLULAR))
+        IslandEventBus.updateCall(CallInfo(callerName = "B", source = CallSource.VOIP))
+        assertNotNull(IslandEventBus.callState.value)
+
+        IslandEventBus.resetAllCalls()
+        assertNull(IslandEventBus.callState.value)
     }
 
     @Test
@@ -207,10 +250,10 @@ class IslandStateManagerTest {
             callerName = "Active Call",
             callerNumber = null,
             state = CallState.OFFHOOK,
-            source = CallSource.CELLULAR,
+            source = CallSource.VOIP,
             callDurationSeconds = 15L,
-            isVoip = false,
-            appName = "Phone"
+            isVoip = true,
+            appName = "WhatsApp"
         )
         IslandEventBus.updateCall(genericCall)
 
