@@ -115,6 +115,13 @@ fun ExpandedIslandContent(
                 ExpandedBatteryView(battery = state.battery)
             }
 
+            is IslandState.ExpandedLowBattery -> {
+                ExpandedLowBatteryView(
+                    battery = state.battery,
+                    onDismiss = onDismissRequest
+                )
+            }
+
             is IslandState.ExpandedTimer -> {
                 ExpandedTimerView(
                     timer = state.timer,
@@ -124,6 +131,10 @@ fun ExpandedIslandContent(
                         } else {
                             try { state.timer.resumeIntent?.send() } catch (e: Exception) { e.printStackTrace() }
                         }
+                    },
+                    onReset = {
+                        try { state.timer.resetIntent?.send() } catch (e: Exception) { e.printStackTrace() }
+                        onDismissRequest()
                     },
                     onOpenClock = {
                         try { state.timer.contentIntent?.send() } catch (e: Exception) { e.printStackTrace() }
@@ -654,6 +665,7 @@ private fun ExpandedBatteryView(
 private fun ExpandedTimerView(
     timer: com.dynamicisland.android.model.TimerInfo,
     onTogglePauseResume: () -> Unit,
+    onReset: () -> Unit,
     onOpenClock: () -> Unit
 ) {
     Row(
@@ -721,6 +733,21 @@ private fun ExpandedTimerView(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
+            // Real Reset / Cancel Control when provided by the underlying clock app
+            if (timer.resetIntent != null) {
+                Button(
+                    onClick = onReset,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2C2C2E),
+                        contentColor = Color(0xFFFF453A)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(text = "Reset", fontSize = 11.sp)
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+
             Button(
                 onClick = onOpenClock,
                 colors = ButtonDefaults.buttonColors(
@@ -731,6 +758,65 @@ private fun ExpandedTimerView(
             ) {
                 Text(text = "Clock", fontSize = 11.sp)
             }
+        }
+    }
+}
+
+@Composable
+private fun ExpandedLowBatteryView(
+    battery: com.dynamicisland.android.model.BatteryInfo,
+    onDismiss: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxSize(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x33FF453A)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_battery_charging),
+                    contentDescription = "Low Battery",
+                    tint = Color(0xFFFF453A),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column {
+                Text(
+                    text = "Low Battery (${battery.level}%)",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Connect charger soon",
+                    color = Color(0xFFFF453A),
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Button(
+            onClick = onDismiss,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF2C2C2E),
+                contentColor = Color.White
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(text = "Dismiss", fontSize = 11.sp)
         }
     }
 }

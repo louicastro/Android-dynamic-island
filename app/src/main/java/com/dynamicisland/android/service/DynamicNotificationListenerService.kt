@@ -2,6 +2,7 @@ package com.dynamicisland.android.service
 
 import android.app.Notification
 import android.content.ComponentName
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -9,6 +10,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.telecom.TelecomManager
 import androidx.core.app.NotificationCompat
 import com.dynamicisland.android.model.CallInfo
 import com.dynamicisland.android.model.CallState
@@ -19,7 +21,7 @@ import com.dynamicisland.android.model.TimerInfo
 /**
  * Intercepts notifications, active media sessions, in-call alerts, and timers.
  * Employs targeted ongoing notification filtering, RemoteInput detection,
- * and memory-safe bitmap downsampling.
+ * initial notification state seeding, and memory-safe bitmap downsampling.
  */
 class DynamicNotificationListenerService : NotificationListenerService() {
 
@@ -44,11 +46,11 @@ class DynamicNotificationListenerService : NotificationListenerService() {
         val component = ComponentName(this, DynamicNotificationListenerService::class.java)
         mediaSessionTracker.start(component)
 
-        // Reconcile and seed existing active notifications on connection
+        // Seed existing notifications into persistent state WITHOUT triggering alert toasts
         try {
             val active = activeNotifications
             active?.forEach { sbn ->
-                handleNotificationPosted(sbn)
+                handleNotificationPosted(sbn, isInitialSeed = true)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -66,7 +68,7 @@ class DynamicNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         sbn ?: return
-        handleNotificationPosted(sbn)
+        handleNotificationPosted(sbn, isInitialSeed = false)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -86,7 +88,7 @@ class DynamicNotificationListenerService : NotificationListenerService() {
         IslandEventBus.removeNotification(sbn.key)
     }
 
-    private fun handleNotificationPosted(sbn: StatusBarNotification) {
+    private fun handleNotificationPosted(sbn: StatusBarNotification, isInitialSeed: Boolean) {
         // Skip our own overlay service notification
         if (sbn.packageName == packageName) return
 
@@ -133,6 +135,20 @@ class DynamicNotificationListenerService : NotificationListenerService() {
 
         // 1. Check if this is an incoming or active Call (VoIP or system dialer)
         if (notification.category == Notification.CATEGORY_CALL || hasCallActions(actions)) {
+            val telecomManager = getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+            val defaultDialer = telecomManager?.defaultDialerPackage
+            val pkg = sbn.packageName.lowercase()
+            val isCellularDialer = (defaultDialer != null && sbn.packageName == defaultDialer) ||
+                    pkg.contains("dialer") ||
+                    pkg.contains("incallui") ||
+                    pkg.contains("telecom") ||
+                    pkg == "com.android.phone" ||
+                    pkg == "com.samsung.android.dialer" ||
+                    pkg == "com.google.android.dialer"
+
+            val isVoip = !isCellularDialer
+            val appDisplayName = if (isCellularDialer) "Phone" else appName
+
             val answerAction = actions.firstOrNull {
                 it.title.contains("answer", ignoreCase = true) ||
                         it.title.contains("accept", ignoreCase = true)
@@ -147,11 +163,11 @@ class DynamicNotificationListenerService : NotificationListenerService() {
             val callState = if (answerAction != null) CallState.RINGING else CallState.OFFHOOK
 
             val callInfo = CallInfo(
-                callerName = title.ifBlank { appName },
+                callerName = title.ifBlank { appDisplayName },
                 callerNumber = text.ifBlank { null },
                 state = callState,
-                isVoip = true,
-                appName = appName,
+                isVoip = isVoip,
+                appName = appDisplayName,
                 avatar = iconBitmap,
                 answerIntent = answerAction?.intent,
                 declineIntent = declineAction?.intent
@@ -172,7 +188,8 @@ class DynamicNotificationListenerService : NotificationListenerService() {
             }
             val resetAction = actions.firstOrNull {
                 it.title.contains("reset", ignoreCase = true) ||
-                        it.title.contains("cancel", ignoreCase = true)
+                        it.title.contains("cancel", ignoreCase = true) ||
+                        it.title.contains("delete", ignoreCase = true)
             }
 
             val timerInfo = TimerInfo(
@@ -204,7 +221,14 @@ class DynamicNotificationListenerService : NotificationListenerService() {
                 postTime = sbn.postTime,
                 isOngoing = isOngoing
             )
-            IslandEventBus.postNotification(item)
+
+            if (isInitialSeed) {
+                // Seed silently without triggering a new toast alert animation
+                IslandEventBus.seedNotification(item)
+            } else {
+                // Post as a fresh notification event with animated toast
+                IslandEventBus.postNotification(item)
+            }
         }
     }
 

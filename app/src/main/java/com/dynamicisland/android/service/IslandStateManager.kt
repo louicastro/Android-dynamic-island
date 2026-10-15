@@ -22,8 +22,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Dedicated state reducer and state-holder for the Dynamic Island.
- * Decouples state prioritization, transient toast queueing, and multi-tasking logic
- * from the Android Service and WindowManager lifecycle.
+ * Decouples state prioritization, transient toast queueing, low battery latching,
+ * and multi-tasking logic from the Android Service and WindowManager lifecycle.
  */
 class IslandStateManager(
     private val settingsRepository: SettingsRepository,
@@ -37,11 +37,14 @@ class IslandStateManager(
     // Transient alert states
     private var activeNotificationToast: NotificationItem? = null
     private var activeChargingToast: BatteryInfo? = null
+    private var activeLowBatteryToast: BatteryInfo? = null
     private var activeRingerToast: Boolean? = null
     private var activeBluetoothToast: Pair<String, Int?>? = null
     private var isExpandedManually: Boolean = false
 
     private var lastChargingState: Boolean = false
+    private var hasFiredLowBatteryAlert: Boolean = false
+    private val lowBatteryThreshold: Int = 20
 
     init {
         observeSubsystems()
@@ -91,10 +94,24 @@ class IslandStateManager(
 
             is IslandEvent.BatteryUpdate -> {
                 if (settings.enableBattery) {
-                    if (event.battery.isCharging && !lastChargingState) {
-                        activeChargingToast = event.battery
+                    val battery = event.battery
+                    if (battery.isCharging) {
+                        // Charger connected: show charging toast and reset low battery alert latch
+                        if (!lastChargingState) {
+                            activeChargingToast = battery
+                            activeLowBatteryToast = null
+                        }
+                        hasFiredLowBatteryAlert = false
+                    } else {
+                        // Discharging: check low battery threshold with single-trigger latch
+                        if (battery.level <= lowBatteryThreshold && !hasFiredLowBatteryAlert) {
+                            activeLowBatteryToast = battery
+                            hasFiredLowBatteryAlert = true
+                        } else if (battery.level > lowBatteryThreshold) {
+                            hasFiredLowBatteryAlert = false
+                        }
                     }
-                    lastChargingState = event.battery.isCharging
+                    lastChargingState = battery.isCharging
                     recompute()
                 }
             }
@@ -118,6 +135,7 @@ class IslandStateManager(
                 isExpandedManually = false
                 activeNotificationToast = null
                 activeChargingToast = null
+                activeLowBatteryToast = null
                 activeRingerToast = null
                 activeBluetoothToast = null
                 recompute()
@@ -126,6 +144,7 @@ class IslandStateManager(
             is IslandEvent.ToastTimeout -> {
                 activeNotificationToast = null
                 activeChargingToast = null
+                activeLowBatteryToast = null
                 activeRingerToast = null
                 activeBluetoothToast = null
                 recompute()
@@ -187,6 +206,11 @@ class IslandStateManager(
         if (activeChargingToast != null) {
             return if (isExpandedManually) IslandState.ExpandedBattery(activeChargingToast!!)
             else IslandState.ChargingToast(activeChargingToast!!)
+        }
+
+        if (activeLowBatteryToast != null) {
+            return if (isExpandedManually) IslandState.ExpandedLowBattery(activeLowBatteryToast!!)
+            else IslandState.LowBatteryToast(activeLowBatteryToast!!)
         }
 
         if (activeRingerToast != null) {

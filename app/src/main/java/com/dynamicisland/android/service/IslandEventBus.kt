@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * Authoritative event bus and state repository connecting notification, media,
  * call, battery, and timer trackers to the island presentation layer.
  *
- * Uses StateFlow for persistent states to guarantee zero event loss regardless
- * of subscriber connection timing, and replay-cached SharedFlow for transient gestures.
+ * Uses StateFlow for persistent states and replay = 0 for transient events to prevent
+ * stale toasts from replaying on new collectors.
  */
 object IslandEventBus {
 
@@ -38,9 +38,9 @@ object IslandEventBus {
     private val _activeNotifications = MutableStateFlow<Map<String, NotificationItem>>(emptyMap())
     val activeNotifications: StateFlow<Map<String, NotificationItem>> = _activeNotifications.asStateFlow()
 
-    // Transient Events (User taps, auto-dismiss, temporary toasts)
+    // Transient Events with replay = 0 to prevent replaying old alerts on new subscribers
     private val _transientEvents = MutableSharedFlow<IslandEvent>(
-        replay = 1,
+        replay = 0,
         extraBufferCapacity = 64
     )
     val transientEvents: SharedFlow<IslandEvent> = _transientEvents.asSharedFlow()
@@ -55,11 +55,45 @@ object IslandEventBus {
         _transientEvents.tryEmit(IslandEvent.MediaUpdate(media))
     }
 
+    /**
+     * Updates call state while intelligently merging with existing caller identity
+     * to prevent generic cellular timer loops from overwriting notification-provided names/avatars.
+     */
     fun updateCall(call: CallInfo?) {
-        _callState.value = call
-        if (call != null) {
-            _transientEvents.tryEmit(IslandEvent.CallUpdate(call))
+        if (call == null) {
+            _callState.value = null
+            return
         }
+
+        val previous = _callState.value
+        val merged = if (previous != null) {
+            val isIncomingNameGeneric = call.callerName.isNullOrBlank() ||
+                    call.callerName == "Cellular Call" ||
+                    call.callerName == "Active Call" ||
+                    call.callerName == "Phone" ||
+                    call.callerName == "Incoming Call"
+
+            val resolvedName = if (isIncomingNameGeneric && !previous.callerName.isNullOrBlank()) {
+                previous.callerName
+            } else {
+                call.callerName
+            }
+
+            call.copy(
+                callerName = resolvedName,
+                callerNumber = call.callerNumber ?: previous.callerNumber,
+                avatar = call.avatar ?: previous.avatar,
+                isVoip = if (call.isVoip) true else previous.isVoip,
+                appName = call.appName ?: previous.appName,
+                answerIntent = call.answerIntent ?: previous.answerIntent,
+                declineIntent = call.declineIntent ?: previous.declineIntent
+            )
+        } else {
+            call
+        }
+
+        _callState.value = merged
+        _transientEvents.tryEmit(IslandEvent.CallUpdate(merged))
     }
 
     fun updateTimer(timer: TimerInfo?) {
@@ -67,6 +101,31 @@ object IslandEventBus {
         _transientEvents.tryEmit(IslandEvent.TimerUpdate(timer))
     }
 
+    /**
+     * Seeds initial notifications into the persistent state without triggering
+     * transient alert toasts.
+     */
+    fun seedNotification(notification: NotificationItem) {
+        val updated = _activeNotifications.value.toMutableMap()
+        updated[notification.key] = notification
+        _activeNotifications.value = updated
+    }
+
+    /**
+     * Seeds a batch of existing active notifications without triggering toast animations.
+     */
+    fun seedActiveNotifications(notifications: List<NotificationItem>) {
+        val updated = _activeNotifications.value.toMutableMap()
+        for (item in notifications) {
+            updated[item.key] = item
+        }
+        _activeNotifications.value = updated
+    }
+
+    /**
+     * Posts a new incoming notification, updating the persistent map and triggering
+     * an alert toast event.
+     */
     fun postNotification(notification: NotificationItem) {
         val updated = _activeNotifications.value.toMutableMap()
         updated[notification.key] = notification
@@ -85,9 +144,6 @@ object IslandEventBus {
         _transientEvents.tryEmit(event)
     }
 
-    /**
-     * Dispatcher method providing backward compatibility and central dispatching.
-     */
     fun emit(event: IslandEvent) {
         when (event) {
             is IslandEvent.BatteryUpdate -> updateBattery(event.battery)

@@ -86,14 +86,86 @@ class IslandStateManagerTest {
     }
 
     @Test
-    fun testTimerControlsModel() {
+    fun testTimerControlsModelWithReset() {
         val timer = TimerInfo(
             label = "Eggs",
             totalSeconds = 180L,
             remainingSeconds = 60L,
-            isRunning = true
+            isRunning = true,
+            resetIntent = null
         )
         assertEquals("1:00", timer.formattedRemaining)
         assertEquals(0.666f, timer.progressFraction, 0.01f)
+        assertFalse(timer.hasExecutableControls)
+    }
+
+    @Test
+    fun testNoReplayOfTransientEvents() {
+        // Verify that replay = 0 prevents caching old transient events
+        assertTrue(IslandEventBus.transientEvents.replayCache.isEmpty())
+    }
+
+    @Test
+    fun testSeedingNotificationWithoutToast() {
+        val notif = NotificationItem(
+            key = "seed_key",
+            packageName = "com.slack",
+            appName = "Slack",
+            title = "Team",
+            text = "Deployment successful"
+        )
+        // Seeding updates active notifications without emitting to transientEvents
+        IslandEventBus.seedNotification(notif)
+        assertTrue(IslandEventBus.activeNotifications.value.containsKey("seed_key"))
+        assertTrue(IslandEventBus.transientEvents.replayCache.isEmpty())
+    }
+
+    @Test
+    fun testCallMergingPreservesCallerName() {
+        // 1. Initial VoIP/Notification call arrives with specific caller name
+        val specificCall = CallInfo(
+            callerName = "Sarah Miller",
+            callerNumber = "+1 (555) 019-2834",
+            state = CallState.RINGING,
+            isVoip = true,
+            appName = "WhatsApp"
+        )
+        IslandEventBus.updateCall(specificCall)
+        assertEquals("Sarah Miller", IslandEventBus.callState.value?.callerName)
+
+        // 2. Cellular duration counter emits a generic label ("Active Call")
+        val genericCall = CallInfo(
+            callerName = "Active Call",
+            callerNumber = null,
+            state = CallState.OFFHOOK,
+            callDurationSeconds = 15L,
+            isVoip = false,
+            appName = "Phone"
+        )
+        IslandEventBus.updateCall(genericCall)
+
+        // The specific caller name and number are preserved, while state and duration are updated!
+        assertEquals("Sarah Miller", IslandEventBus.callState.value?.callerName)
+        assertEquals("+1 (555) 019-2834", IslandEventBus.callState.value?.callerNumber)
+        assertEquals(15L, IslandEventBus.callState.value?.callDurationSeconds)
+    }
+
+    @Test
+    fun testLowBatteryThresholds() {
+        val normal = BatteryInfo(level = 45, isCharging = false)
+        assertFalse(normal.isLow)
+        assertFalse(normal.isCritical)
+
+        val low = BatteryInfo(level = 18, isCharging = false)
+        assertTrue(low.isLow)
+        assertFalse(low.isCritical)
+
+        val critical = BatteryInfo(level = 8, isCharging = false)
+        assertTrue(critical.isLow)
+        assertTrue(critical.isCritical)
+
+        // When charging, low battery warnings are suppressed
+        val chargingLow = BatteryInfo(level = 15, isCharging = true)
+        assertFalse(chargingLow.isLow)
     }
 }

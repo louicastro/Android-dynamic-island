@@ -252,6 +252,27 @@ fun CompactIslandContent(
                     }
                 }
 
+                is IslandState.LowBatteryToast -> {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_battery_charging),
+                            contentDescription = "Low Battery",
+                            tint = AppleRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "${currentState.battery.level}% Low",
+                            color = AppleRed,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
                 else -> {
                     Box(modifier = Modifier.fillMaxSize())
                 }
