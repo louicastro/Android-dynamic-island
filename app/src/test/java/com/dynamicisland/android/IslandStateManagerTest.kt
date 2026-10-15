@@ -7,9 +7,19 @@ import com.dynamicisland.android.model.CallState
 import com.dynamicisland.android.model.IslandSettings
 import com.dynamicisland.android.model.IslandState
 import com.dynamicisland.android.model.MediaInfo
+import com.dynamicisland.android.data.SettingsDataSource
 import com.dynamicisland.android.model.NotificationItem
 import com.dynamicisland.android.model.TimerInfo
 import com.dynamicisland.android.service.IslandEventBus
+import com.dynamicisland.android.service.IslandStateManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -17,6 +27,17 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+
+class FakeSettingsDataSource(
+    initialSettings: IslandSettings = IslandSettings()
+) : SettingsDataSource {
+    private val _flow = MutableStateFlow(initialSettings)
+    override val settingsFlow: StateFlow<IslandSettings> = _flow.asStateFlow()
+    override fun getSettings(): IslandSettings = _flow.value
+    override fun updateSettings(update: (IslandSettings) -> IslandSettings) {
+        _flow.value = update(_flow.value)
+    }
+}
 
 class IslandStateManagerTest {
 
@@ -26,6 +47,7 @@ class IslandStateManagerTest {
         IslandEventBus.resetAllCalls()
         IslandEventBus.updateMedia(null)
         IslandEventBus.updateTimer(null)
+        IslandEventBus.updateBattery(null)
     }
 
     @Test
@@ -280,5 +302,66 @@ class IslandStateManagerTest {
         // When charging, low battery warnings are suppressed
         val chargingLow = BatteryInfo(level = 15, isCharging = true)
         assertFalse(chargingLow.isLow)
+    }
+
+    @Test
+    fun testSilentBatteryStartupWhenAlreadyCharging() = runBlocking {
+        val fakeSettings = FakeSettingsDataSource(IslandSettings(enableBattery = true))
+        val testScope = CoroutineScope(Dispatchers.Unconfined + Job())
+        val stateManager = IslandStateManager(fakeSettings, IslandEventBus, testScope)
+
+        // Finding 41: Startup broadcast arrives with phone ALREADY charging at 80%
+        IslandEventBus.updateBattery(BatteryInfo(level = 80, isCharging = true, isPlugged = true))
+
+        // Startup guard seeds state silently without firing any charging toast alert
+        assertEquals(IslandState.Idle, stateManager.currentState.value)
+        testScope.cancel()
+    }
+
+    @Test
+    fun testChargingToastTriggeredOnlyOnUnpluggedToPluggedTransition() = runBlocking {
+        val fakeSettings = FakeSettingsDataSource(IslandSettings(enableBattery = true))
+        val testScope = CoroutineScope(Dispatchers.Unconfined + Job())
+        val stateManager = IslandStateManager(fakeSettings, IslandEventBus, testScope)
+
+        // 1. Initial startup broadcast while unplugged: seeds state silently
+        IslandEventBus.updateBattery(BatteryInfo(level = 80, isCharging = false, isPlugged = false))
+        assertEquals(IslandState.Idle, stateManager.currentState.value)
+
+        // 2. User plugs phone into charger: transition from unplugged to plugged
+        IslandEventBus.updateBattery(BatteryInfo(level = 80, isCharging = true, isPlugged = true))
+
+        // Genuine transition triggers charging toast alert
+        val state = stateManager.currentState.value
+        assertTrue("Expected IslandState.Charging toast but got $state", state is IslandState.Charging)
+        assertEquals(80, (state as IslandState.Charging).battery.level)
+
+        // 3. User unplugs phone: transition from plugged to unplugged
+        IslandEventBus.updateBattery(BatteryInfo(level = 81, isCharging = false, isPlugged = false))
+
+        // Charging toast is evicted immediately, returning to Idle
+        assertEquals(IslandState.Idle, stateManager.currentState.value)
+        testScope.cancel()
+    }
+
+    @Test
+    fun testBatteryAlertDisabledPurgesActiveChargingToast() = runBlocking {
+        val fakeSettings = FakeSettingsDataSource(IslandSettings(enableBattery = true))
+        val testScope = CoroutineScope(Dispatchers.Unconfined + Job())
+        val stateManager = IslandStateManager(fakeSettings, IslandEventBus, testScope)
+
+        // Seed initial state unplugged
+        IslandEventBus.updateBattery(BatteryInfo(level = 50, isCharging = false, isPlugged = false))
+
+        // Plug in charger -> triggers charging toast
+        IslandEventBus.updateBattery(BatteryInfo(level = 50, isCharging = true, isPlugged = true))
+        assertTrue(stateManager.currentState.value is IslandState.Charging)
+
+        // Finding 38: User disables battery alerts in settings
+        fakeSettings.updateSettings { it.copy(enableBattery = false) }
+
+        // Active charging toast is immediately evicted, returning to Idle
+        assertEquals(IslandState.Idle, stateManager.currentState.value)
+        testScope.cancel()
     }
 }

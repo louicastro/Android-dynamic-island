@@ -9,17 +9,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class SettingsRepository(context: Context) {
+class SettingsRepository(context: Context) : SettingsDataSource {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _settingsFlow = MutableStateFlow(loadSettings())
-    val settingsFlow: StateFlow<IslandSettings> = _settingsFlow.asStateFlow()
+    override val settingsFlow: StateFlow<IslandSettings> = _settingsFlow.asStateFlow()
 
-    fun getSettings(): IslandSettings = _settingsFlow.value
+    override fun getSettings(): IslandSettings = _settingsFlow.value
 
-    fun updateSettings(update: (IslandSettings) -> IslandSettings) {
+    override fun updateSettings(update: (IslandSettings) -> IslandSettings) {
         val updated = update(_settingsFlow.value)
         _settingsFlow.value = updated
         saveSettings(updated)

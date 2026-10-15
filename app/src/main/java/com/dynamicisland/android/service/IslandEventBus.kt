@@ -58,7 +58,7 @@ object IslandEventBus {
      * Updates persistent battery state.
      * Does NOT duplicate into _transientEvents (Finding 37).
      */
-    fun updateBattery(battery: BatteryInfo) {
+    fun updateBattery(battery: BatteryInfo?) {
         _batteryState.value = battery
     }
 

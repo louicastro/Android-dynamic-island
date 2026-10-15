@@ -1,6 +1,6 @@
 package com.dynamicisland.android.service
 
-import com.dynamicisland.android.data.SettingsRepository
+import com.dynamicisland.android.data.SettingsDataSource
 import com.dynamicisland.android.model.BatteryInfo
 import com.dynamicisland.android.model.CallInfo
 import com.dynamicisland.android.model.CallState
@@ -75,16 +75,16 @@ enum class ExpandedTarget {
  * Implements:
  * - Single reducer loop for persistent states; transient queue strictly for one-time alerts (Finding 37)
  * - Immediate eviction of charging and low battery toasts when battery alerts are disabled (Finding 38)
- * - Startup guard ensuring initial battery broadcast does not fire an unwanted charging toast (Section 17.2)
+ * - Startup guard ensuring initial battery broadcast does not fire an unwanted charging toast (Section 17.2, Finding 41)
  * - Source-isolated call merging and deterministic priority (Finding 39, Finding 40)
  * - Bounded notification and toast queue with deduplication and targeted timeouts
  * - Low battery alert threshold (<=20%) with hysteresis (>25% reset)
  * - Independent user expansion state preservation
  */
 class IslandStateManager(
-    private val settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsDataSource,
     private val eventBus: IslandEventBus = IslandEventBus,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 ) {
 
     private val _currentState = MutableStateFlow<IslandState>(IslandState.Idle)
